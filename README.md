@@ -3,11 +3,14 @@
 Muninn is a ROS2 robot operations platform for monitoring system health, launching robot subsystems, and managing experiment data recording through a Flutter-based dashboard and FastAPI backend.
 
 # Repository Structure
+```text
 muninn/
 ├── backend/
 │   ├── muninn_backend.py
-│   ├── muninn_config.yaml
-│   └── requirements.txt
+│   ├── config/
+│   │   └── muninn.yaml
+│   ├── requirements.txt
+│   └── README.md
 │
 ├── dashboard/
 │   └── Flutter app
@@ -17,19 +20,21 @@ muninn/
 │
 ├── README.md
 └── .gitignore
+```
 
 
 # Architecture
+```text
 Flutter Dashboard
-        |
-        | REST API
-        v
+       │
+       │ REST API
+       ▼
 Muninn Backend
-        |
-        | ros2 launch / ros2 bag / ros2 node list
-        v
+       │
+       │ ros2 launch / ros2 bag / ros2 node list
+       ▼
 ROS2 Robot
-
+```
 # Running Muninn
 
 ### Start the Backend
