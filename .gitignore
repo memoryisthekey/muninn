@@ -1,0 +1,37 @@
+# Python
+
+**pycache**/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Flutter
+
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+
+# Android
+
+android/.gradle/
+android/app/build/
+
+# iOS
+
+ios/Pods/
+
+# IDEs
+
+.vscode/
+.idea/
+
+# OS
+
+.DS_Store
+Thumbs.db
