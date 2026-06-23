@@ -1,0 +1,26 @@
+ros:
+  setup_files:
+    - /opt/ros/jazzy/setup.bash
+    - ~/ros2_ws/install/setup.bash
+
+all_sensors:
+  launch_command: ros2 launch muninn_ros sensors.launch.py
+
+sensors:
+  realsense:
+    display_name: RealSense
+    ros_node_name: /camera/camera
+    launch_command: ros2 launch realsense2_camera rs_launch.py
+
+  ublox:
+    display_name: Ublox GPS
+    ros_node_name: /ublox_gps_node
+    launch_command: ros2 launch ublox_gps ublox_gps_node-launch.py
+
+  ntrip:
+    display_name: NTRIP Client
+    ros_node_name: /ntrip_client
+    launch_command: ros2 launch ntrip_client ntrip_client_launch.py
+
+recording:
+  command: ~/ros2_ws/src/muninn_ros/scripts/record_bag.sh

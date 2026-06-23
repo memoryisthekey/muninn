@@ -4,8 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-//Change this if not MOCK
-const bool devMode = true;
+const bool devMode = false;
 const String backendUrl = 'http://localhost:8000';
 
 void main() {
@@ -56,7 +55,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> fetchStatus() async {
     if (devMode) {
       setState(() {
-        status = mockStatus;
+        status = Map<String, dynamic>.from(mockStatus);
       });
       return;
     }
@@ -74,19 +73,25 @@ class _DashboardPageState extends State<DashboardPage> {
     if (devMode) {
       debugPrint('Mock POST: $path');
 
-      if (path == '/record/start') {
-        setState(() {
-          mockStatus['recording'] = true;
-          status = Map<String, dynamic>.from(mockStatus);
-        });
+      if (path == '/recording/start') {
+        mockStatus['recording'] = true;
       }
 
-      if (path == '/record/stop') {
-        setState(() {
-          mockStatus['recording'] = false;
-          status = Map<String, dynamic>.from(mockStatus);
-        });
+      if (path == '/recording/stop') {
+        mockStatus['recording'] = false;
       }
+
+      if (path == '/sensors/start') {
+        mockStatus['all_sensors_launch_running'] = true;
+      }
+
+      if (path == '/sensors/stop') {
+        mockStatus['all_sensors_launch_running'] = false;
+      }
+
+      setState(() {
+        status = Map<String, dynamic>.from(mockStatus);
+      });
 
       return;
     }
@@ -97,8 +102,11 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final nodes = status?['required_nodes'] as List<dynamic>? ?? [];
     final recording = status?['recording'] == true;
+    final allSensorsRunning = status?['all_sensors_launch_running'] == true;
+
+    final sensorsMap = status?['sensors'] as Map<String, dynamic>? ?? {};
+    final sensors = sensorsMap.entries.toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -113,48 +121,41 @@ class _DashboardPageState extends State<DashboardPage> {
                 children: [
                   RecordingCard(
                     isRecording: recording,
-                    onStart: () => post('/record/start'),
-                    onStop: () => post('/record/stop'),
+                    onStart: () => post('/recording/start'),
+                    onStop: () => post('/recording/stop'),
+                  ),
+                  const SizedBox(height: 16),
+                  SensorsControlCard(
+                    allSensorsRunning: allSensorsRunning,
+                    onStartAll: () => post('/sensors/start'),
+                    onStopAll: () => post('/sensors/stop'),
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'Required Nodes',
+                    'Sensors',
                     style: TextStyle(fontSize: 22),
                   ),
                   const SizedBox(height: 12),
                   Expanded(
                     child: ListView.builder(
-                      itemCount: nodes.length,
+                      itemCount: sensors.length,
                       itemBuilder: (context, index) {
-                        final node = nodes[index];
-                        final running = node['running'] == true;
+                        final entry = sensors[index];
+                        final key = entry.key;
+                        final sensor = entry.value as Map<String, dynamic>;
 
-                        return Card(
-                          child: ListTile(
-                            leading: Icon(
-                              Icons.circle,
-                              color: running
-                                  ? Colors.greenAccent
-                                  : Colors.redAccent,
-                            ),
-                            title: Text(node['display_name'] ?? node['key']),
-                            subtitle: Text(node['ros_node_name'] ?? ''),
-                            trailing: Wrap(
-                              spacing: 8,
-                              children: [
-                                ElevatedButton(
-                                  onPressed: () =>
-                                      post('/launch/${node['key']}'),
-                                  child: const Text('Launch'),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () =>
-                                      post('/stop/${node['key']}'),
-                                  child: const Text('Stop'),
-                                ),
-                              ],
-                            ),
-                          ),
+                        final running = sensor['running'] == true;
+                        final launchedByBackend =
+                            sensor['launched_by_backend'] == true;
+
+                        return SensorCard(
+                          sensorKey: key,
+                          displayName: sensor['display_name'] ?? key,
+                          rosNodeName: sensor['ros_node_name'] ?? '',
+                          running: running,
+                          launchedByBackend: launchedByBackend,
+                          onStart: () => post('/sensor/$key/start'),
+                          onStop: () => post('/sensor/$key/stop'),
                         );
                       },
                     ),
@@ -187,33 +188,15 @@ class RecordingCard extends StatelessWidget {
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            colors: [
-              Colors.grey.shade900,
-              Colors.grey.shade800,
-            ],
-          ),
-        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Recording',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            const Text('Recording',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             Row(
               children: [
-                Icon(
-                  Icons.fiber_manual_record,
-                  color: statusColor,
-                  size: 18,
-                ),
+                Icon(Icons.fiber_manual_record, color: statusColor, size: 18),
                 const SizedBox(width: 8),
                 Text(
                   isRecording ? 'Recording active' : 'Ready to record',
@@ -241,10 +224,6 @@ class RecordingCard extends StatelessWidget {
                     onPressed: isRecording ? onStop : null,
                     icon: const Icon(Icons.stop),
                     label: const Text('Stop'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
-                      foregroundColor: Colors.white,
-                    ),
                   ),
                 ),
               ],
@@ -256,26 +235,154 @@ class RecordingCard extends StatelessWidget {
   }
 }
 
+class SensorsControlCard extends StatelessWidget {
+  const SensorsControlCard({
+    super.key,
+    required this.allSensorsRunning,
+    required this.onStartAll,
+    required this.onStopAll,
+  });
+
+  final bool allSensorsRunning;
+  final VoidCallback onStartAll;
+  final VoidCallback onStopAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor =
+        allSensorsRunning ? Colors.greenAccent : Colors.orangeAccent;
+
+    return Card(
+      elevation: 8,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Sensor Launch',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Icon(Icons.circle, color: statusColor, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  allSensorsRunning
+                      ? 'sensors.launch.py active'
+                      : 'sensors.launch.py not active',
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: allSensorsRunning ? null : onStartAll,
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('Launch All'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: allSensorsRunning ? onStopAll : null,
+                    icon: const Icon(Icons.stop),
+                    label: const Text('Stop All'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SensorCard extends StatelessWidget {
+  const SensorCard({
+    super.key,
+    required this.sensorKey,
+    required this.displayName,
+    required this.rosNodeName,
+    required this.running,
+    required this.launchedByBackend,
+    required this.onStart,
+    required this.onStop,
+  });
+
+  final String sensorKey;
+  final String displayName;
+  final String rosNodeName;
+  final bool running;
+  final bool launchedByBackend;
+  final VoidCallback onStart;
+  final VoidCallback onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = running ? Colors.greenAccent : Colors.redAccent;
+
+    return Card(
+      child: ListTile(
+        leading: Icon(Icons.circle, color: statusColor),
+        title: Text(displayName),
+        subtitle: Text(
+          '$rosNodeName\n${launchedByBackend ? "Launched by backend" : "Detected from ROS"}',
+        ),
+        isThreeLine: true,
+        trailing: Wrap(
+          spacing: 8,
+          children: [
+            ElevatedButton(
+              onPressed: running ? null : onStart,
+              child: const Text('Launch'),
+            ),
+            ElevatedButton(
+              onPressed: launchedByBackend ? onStop : null,
+              child: const Text('Stop'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 final Map<String, dynamic> mockStatus = {
+  "ok": true,
   "recording": false,
-  "required_nodes": [
-    {
-      "key": "ouster",
+  "all_sensors_launch_running": false,
+  "sensors": {
+    "ouster": {
       "display_name": "Ouster 3D Lidar",
       "ros_node_name": "/a300_00008/os_driver",
       "running": true,
+      "launched_by_backend": false,
     },
-    {
-      "key": "realsense",
+    "realsense": {
       "display_name": "RealSense D435",
-      "ros_node_name": "/a300_00008/camera/camera",
+      "ros_node_name": "/camera/camera",
       "running": false,
+      "launched_by_backend": false,
     },
-    {
-      "key": "joystick",
-      "display_name": "Legion Joystick",
-      "ros_node_name": "/joy_node",
+    "ublox": {
+      "display_name": "Ublox GPS",
+      "ros_node_name": "/ublox_gps_node",
       "running": true,
+      "launched_by_backend": false,
     },
-  ],
+    "ntrip": {
+      "display_name": "NTRIP Client",
+      "ros_node_name": "/ntrip_client",
+      "running": true,
+      "launched_by_backend": false,
+    },
+  },
 };
