@@ -4,23 +4,43 @@ ros:
     - ~/ros2_ws/install/setup.bash
 
 all_sensors:
+  display_name: Camera and RTK Launch
   launch_command: ros2 launch muninn_ros sensors.launch.py
+  managed_sensors:
+    - realsense
+    - ublox
+    - ntrip
 
 sensors:
   realsense:
     display_name: RealSense
     ros_node_name: /camera/camera
+    launchable: true
     launch_command: ros2 launch realsense2_camera rs_launch.py
+    stop_command: pkill -f realsense2_camera_node
 
   ublox:
     display_name: Ublox GPS
     ros_node_name: /ublox_gps_node
+    launchable: true
     launch_command: ros2 launch ublox_gps ublox_gps_node-launch.py
+    stop_command: pkill -f ublox_gps_node
 
   ntrip:
     display_name: NTRIP Client
     ros_node_name: /ntrip_client
+    launchable: true
     launch_command: ros2 launch ntrip_client ntrip_client_launch.py
+    stop_command: pkill -f ntrip_ros.py
+
+status_only:
+  imu:
+    display_name: IMU
+    ros_node_name: /a300_00008/sensors/imu_0/phidgets_spatial
+
+  lidar:
+    display_name: Ouster 3D Lidar
+    ros_node_name: /a300_00008/sensors/lidar3d_0/ouster_driver
 
 recording:
-  command: ~/ros2_ws/src/muninn_ros/scripts/record_bag.sh
+  command: ~/ros2_ws/src/muninn_ros/scripts/record_husky.bash

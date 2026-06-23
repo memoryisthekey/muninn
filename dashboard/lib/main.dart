@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 const bool devMode = false;
-const String backendUrl = 'http://localhost:8000';
+const String backendUrl = 'http://192.168.131.88:8000';
 
 void main() {
   runApp(const MuninnApp());
@@ -60,12 +60,16 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    final response = await http.get(Uri.parse('$backendUrl/status'));
+    try {
+      final response = await http.get(Uri.parse('$backendUrl/status'));
 
-    if (response.statusCode == 200) {
-      setState(() {
-        status = jsonDecode(response.body);
-      });
+      if (response.statusCode == 200) {
+        setState(() {
+          status = jsonDecode(response.body);
+        });
+      }
+    } catch (e) {
+      debugPrint('Status fetch failed: $e');
     }
   }
 
@@ -83,6 +87,12 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (path == '/sensors/start') {
         mockStatus['all_sensors_launch_running'] = true;
+
+        final sensors = mockStatus['sensors'] as Map<String, dynamic>;
+        for (final sensor in sensors.values) {
+          sensor['running'] = true;
+          sensor['launched_by_backend'] = true;
+        }
       }
 
       if (path == '/sensors/stop') {
@@ -103,13 +113,24 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final recording = status?['recording'] == true;
-    final allSensorsRunning = status?['all_sensors_launch_running'] == true;
 
     final sensorsMap = status?['sensors'] as Map<String, dynamic>? ?? {};
-    final sensors = sensorsMap.entries.toList();
+    final statusOnlyMap = status?['status_only'] as Map<String, dynamic>? ?? {};
+
+    final launchableSensors = sensorsMap.entries.toList();
+    final statusOnlyNodes = statusOnlyMap.entries.toList();
+
+    final runningSensors = status?['camera_rtk_running_count'] ?? 0;
+    final totalSensors = status?['camera_rtk_total_count'] ?? launchableSensors.length;
+
+    final allItems = [
+      ...launchableSensors,
+      ...statusOnlyNodes,
+    ];
 
     return Scaffold(
       appBar: AppBar(
+        centerTitle: true,
         title: const Text('🐦‍⬛ Muninn'),
       ),
       body: Padding(
@@ -126,23 +147,25 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                   const SizedBox(height: 16),
                   SensorsControlCard(
-                    allSensorsRunning: allSensorsRunning,
+                    runningSensors: runningSensors,
+                    totalSensors: totalSensors,
                     onStartAll: () => post('/sensors/start'),
                     onStopAll: () => post('/sensors/stop'),
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'Sensors',
+                    'System Status',
                     style: TextStyle(fontSize: 22),
                   ),
                   const SizedBox(height: 12),
                   Expanded(
                     child: ListView.builder(
-                      itemCount: sensors.length,
+                      itemCount: allItems.length,
                       itemBuilder: (context, index) {
-                        final entry = sensors[index];
+                        final entry = allItems[index];
                         final key = entry.key;
                         final sensor = entry.value as Map<String, dynamic>;
+                        final launchable = sensor['launchable'] == true;
 
                         final running = sensor['running'] == true;
                         final launchedByBackend =
@@ -154,6 +177,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           rosNodeName: sensor['ros_node_name'] ?? '',
                           running: running,
                           launchedByBackend: launchedByBackend,
+                          launchable: launchable,
                           onStart: () => post('/sensor/$key/start'),
                           onStop: () => post('/sensor/$key/stop'),
                         );
@@ -191,8 +215,10 @@ class RecordingCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Recording',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const Text(
+              'Recording',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -238,19 +264,33 @@ class RecordingCard extends StatelessWidget {
 class SensorsControlCard extends StatelessWidget {
   const SensorsControlCard({
     super.key,
-    required this.allSensorsRunning,
+    required this.runningSensors,
+    required this.totalSensors,
     required this.onStartAll,
     required this.onStopAll,
   });
 
-  final bool allSensorsRunning;
+  final int runningSensors;
+  final int totalSensors;
   final VoidCallback onStartAll;
   final VoidCallback onStopAll;
 
   @override
   Widget build(BuildContext context) {
-    final statusColor =
-        allSensorsRunning ? Colors.greenAccent : Colors.orangeAccent;
+    final allRunning = totalSensors > 0 && runningSensors == totalSensors;
+    final noneRunning = runningSensors == 0;
+
+    final Color statusColor = allRunning
+        ? Colors.greenAccent
+        : noneRunning
+            ? Colors.redAccent
+            : Colors.orangeAccent;
+
+    final String statusText = allRunning
+        ? 'All systems running'
+        : noneRunning
+            ? 'No systems running'
+            : '$runningSensors / $totalSensors systems running';
 
     return Card(
       elevation: 8,
@@ -259,17 +299,17 @@ class SensorsControlCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Sensor Launch',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const Text(
+              'Camera and RTK Launch',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 16),
             Row(
               children: [
                 Icon(Icons.circle, color: statusColor, size: 18),
                 const SizedBox(width: 8),
                 Text(
-                  allSensorsRunning
-                      ? 'sensors.launch.py active'
-                      : 'sensors.launch.py not active',
+                  statusText,
                   style: TextStyle(
                     color: statusColor,
                     fontSize: 18,
@@ -283,17 +323,17 @@ class SensorsControlCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: allSensorsRunning ? null : onStartAll,
+                    onPressed: allRunning ? null : onStartAll,
                     icon: const Icon(Icons.play_arrow),
-                    label: const Text('Launch All'),
+                    label: const Text('Launch'),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: allSensorsRunning ? onStopAll : null,
+                    onPressed: noneRunning ? null : onStopAll,
                     icon: const Icon(Icons.stop),
-                    label: const Text('Stop All'),
+                    label: const Text('Stop'),
                   ),
                 ),
               ],
@@ -315,6 +355,7 @@ class SensorCard extends StatelessWidget {
     required this.launchedByBackend,
     required this.onStart,
     required this.onStop,
+    required this.launchable,
   });
 
   final String sensorKey;
@@ -324,6 +365,7 @@ class SensorCard extends StatelessWidget {
   final bool launchedByBackend;
   final VoidCallback onStart;
   final VoidCallback onStop;
+  final bool launchable;
 
   @override
   Widget build(BuildContext context) {
@@ -337,21 +379,23 @@ class SensorCard extends StatelessWidget {
           '$rosNodeName\n${launchedByBackend ? "Launched by backend" : "Detected from ROS"}',
         ),
         isThreeLine: true,
-        trailing: Wrap(
-          spacing: 8,
-          children: [
-            ElevatedButton(
-              onPressed: running ? null : onStart,
-              child: const Text('Launch'),
-            ),
-            ElevatedButton(
-              onPressed: launchedByBackend ? onStop : null,
-              child: const Text('Stop'),
-            ),
-          ],
-        ),
-      ),
-    );
+        trailing: launchable
+        ? Wrap(
+            spacing: 8,
+            children: [
+              ElevatedButton(
+                onPressed: running ? null : onStart,
+                child: const Text('Launch'),
+              ),
+              ElevatedButton(
+                onPressed: running ? onStop : null,
+                child: const Text('Stop'),
+              ),
+            ],
+          )
+        : null,
+  ) ,
+  );
   }
 }
 
@@ -381,6 +425,18 @@ final Map<String, dynamic> mockStatus = {
     "ntrip": {
       "display_name": "NTRIP Client",
       "ros_node_name": "/ntrip_client",
+      "running": true,
+      "launched_by_backend": false,
+    },
+    "imu": {
+      "display_name": "IMU",
+      "ros_node_name": "/a300_00008/sensors/imu_0",
+      "running": true,
+      "launched_by_backend": false,
+    },
+    "ouster_driver": {
+      "display_name": "Ouster Driver",
+      "ros_node_name": "/a300_00008/ouster_driver",
       "running": true,
       "launched_by_backend": false,
     },
