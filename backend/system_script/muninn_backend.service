@@ -1,0 +1,17 @@
+[Unit]
+Description=Muninn Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=husky
+
+ExecStartPre=/bin/sleep 10
+ExecStart=/home/husky/muninn/backend/system_script/start_backend.bash
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
