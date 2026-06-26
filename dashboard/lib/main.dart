@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const bool devMode = false;
+const bool devMode = true;
 //const String backendUrl = 'http://192.168.131.88:8000';
 const String backendUrl = 'http://192.168.76.88:8000';
 void main() {
