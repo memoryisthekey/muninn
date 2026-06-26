@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 const bool devMode = true;
-//const String backendUrl = 'http://192.168.131.88:8000';
+// const String backendUrl = 'http://192.168.131.88:8000';
 const String backendUrl = 'http://192.168.76.88:8000';
+
 void main() {
   runApp(const MuninnApp());
 }
@@ -19,10 +21,38 @@ class MuninnApp extends StatelessWidget {
     return MaterialApp(
       title: 'Muninn',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(),
+      theme: ThemeData.dark(useMaterial3: true),
       home: const DashboardPage(),
     );
   }
+}
+
+class UiScale {
+  UiScale(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    compact = size.height < 950 || size.width < 1500;
+
+    pagePadding = compact ? 8 : 16;
+    cardPadding = compact ? 10 : 18;
+    gap = compact ? 8 : 14;
+    title = compact ? 16 : 22;
+    subtitle = compact ? 12 : 15;
+    status = compact ? 13 : 17;
+    icon = compact ? 13 : 17;
+    buttonHeight = compact ? 30 : 38;
+    tabHeight = compact ? 30 : 34;
+  }
+
+  late final bool compact;
+  late final double pagePadding;
+  late final double cardPadding;
+  late final double gap;
+  late final double title;
+  late final double subtitle;
+  late final double status;
+  late final double icon;
+  late final double buttonHeight;
+  late final double tabHeight;
 }
 
 class DashboardPage extends StatefulWidget {
@@ -35,6 +65,36 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   Map<String, dynamic>? status;
   Timer? timer;
+
+  bool get isLegion {
+    return Platform.localHostname.toLowerCase().contains('legion');
+  }
+
+  Future<void> runLegionJoystickCommand(String action) async {
+    final allowed = ['start', 'stop', 'restart'];
+
+    if (!allowed.contains(action)) {
+      debugPrint('Invalid joystick service action: $action');
+      return;
+    }
+
+    try {
+      final result = await Process.run(
+        'sudo',
+        ['systemctl', action, 'legion_joystick_node.service'],
+      );
+
+      if (result.exitCode != 0) {
+        debugPrint('Joystick service command failed: ${result.stderr}');
+      } else {
+        debugPrint('Joystick service command succeeded: $action');
+      }
+    } catch (e) {
+      debugPrint('Joystick service command error: $e');
+    }
+
+    await fetchStatus();
+  }
 
   @override
   void initState() {
@@ -87,6 +147,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (path == '/sensors/start') {
         mockStatus['all_sensors_launch_running'] = true;
+        mockStatus['camera_rtk_running_count'] = mockStatus['camera_rtk_total_count'];
 
         final sensors = mockStatus['sensors'] as Map<String, dynamic>;
         for (final sensor in sensors.values) {
@@ -97,6 +158,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
       if (path == '/sensors/stop') {
         mockStatus['all_sensors_launch_running'] = false;
+        mockStatus['camera_rtk_running_count'] = 0;
       }
 
       setState(() {
@@ -112,81 +174,237 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final recording = status?['recording'] == true;
+    final ui = UiScale(context);
+    final tabCount = isLegion ? 3 : 2;
 
-    final sensorsMap = status?['sensors'] as Map<String, dynamic>? ?? {};
-    final statusOnlyMap = status?['status_only'] as Map<String, dynamic>? ?? {};
+    return DefaultTabController(
+      length: tabCount,
+      child: Scaffold(
+        appBar: PreferredSize(
+          preferredSize: Size.fromHeight(ui.tabHeight),
+          child: Material(
+            color: Theme.of(context).colorScheme.surface,
+            child: SafeArea(
+              bottom: false,
+              child: SizedBox(
+                height: ui.tabHeight,
+                child: TabBar(
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  indicatorSize: TabBarIndicatorSize.label,
+                  tabs: [
+                    Tab(
+                      height: ui.tabHeight,
+                      child: Text(
+                        'Muninn',
+                        style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                      ),
+                    ),
+                    Tab(
+                      height: ui.tabHeight,
+                      child: Text(
+                        'Data',
+                        style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                      ),
+                    ),
+                    if (isLegion)
+                      Tab(
+                        height: ui.tabHeight,
+                        child: Text(
+                          'Legion',
+                          style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+        body: status == null
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(
+                children: [
+                  DashboardView(
+                    status: status!,
+                    onPost: post,
+                  ),
+                  const DataManagementView(),
+                  if (isLegion)
+                    LegionControlsView(
+                      onStart: () => runLegionJoystickCommand('start'),
+                      onStop: () => runLegionJoystickCommand('stop'),
+                      onRestart: () => runLegionJoystickCommand('restart'),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class DashboardView extends StatelessWidget {
+  const DashboardView({
+    super.key,
+    required this.status,
+    required this.onPost,
+  });
+
+  final Map<String, dynamic> status;
+  final Future<void> Function(String path) onPost;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+    final recording = status['recording'] == true;
+
+    final sensorsMap = status['sensors'] as Map<String, dynamic>? ?? {};
+    final statusOnlyMap = status['status_only'] as Map<String, dynamic>? ?? {};
 
     final launchableSensors = sensorsMap.entries.toList();
     final statusOnlyNodes = statusOnlyMap.entries.toList();
 
-    final runningSensors = status?['camera_rtk_running_count'] ?? 0;
-    final totalSensors = status?['camera_rtk_total_count'] ?? launchableSensors.length;
+    final runningSensors = status['camera_rtk_running_count'] ?? 0;
+    final totalSensors = status['camera_rtk_total_count'] ?? launchableSensors.length;
 
     final allItems = [
       ...launchableSensors,
       ...statusOnlyNodes,
     ];
 
-    return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        title: const Text('🐦‍⬛ Muninn'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: status == null
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  RecordingCard(
-                    isRecording: recording,
-                    onStart: () => post('/recording/start'),
-                    onStop: () => post('/recording/stop'),
-                  ),
-                  const SizedBox(height: 16),
-                  SensorsControlCard(
-                    runningSensors: runningSensors,
-                    totalSensors: totalSensors,
-                    onStartAll: () => post('/sensors/start'),
-                    onStopAll: () => post('/sensors/stop'),
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'System Status',
-                    style: TextStyle(fontSize: 22),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: allItems.length,
-                      itemBuilder: (context, index) {
-                        final entry = allItems[index];
-                        final key = entry.key;
-                        final sensor = entry.value as Map<String, dynamic>;
-                        final launchable = sensor['launchable'] == true;
+    return ListView(
+      padding: EdgeInsets.all(ui.pagePadding),
+      children: [
+        RecordingCard(
+          isRecording: recording,
+          onStart: () => onPost('/recording/start'),
+          onStop: () => onPost('/recording/stop'),
+        ),
+        SizedBox(height: ui.gap),
+        Text(
+          'System Status',
+          style: TextStyle(fontSize: ui.title, fontWeight: FontWeight.w600),
+        ),
+        SizedBox(height: ui.gap),
+        ResponsiveSystemGrid(
+          runningSensors: runningSensors,
+          totalSensors: totalSensors,
+          onStartAll: () => onPost('/sensors/start'),
+          onStopAll: () => onPost('/sensors/stop'),
+          items: allItems,
+          onStart: (key) => onPost('/sensor/$key/start'),
+          onStop: (key) => onPost('/sensor/$key/stop'),
+        ),
+      ],
+    );
+  }
+}
 
-                        final running = sensor['running'] == true;
-                        final launchedByBackend =
-                            sensor['launched_by_backend'] == true;
 
-                        return SensorCard(
-                          sensorKey: key,
-                          displayName: sensor['display_name'] ?? key,
-                          rosNodeName: sensor['ros_node_name'] ?? '',
-                          running: running,
-                          launchedByBackend: launchedByBackend,
-                          launchable: launchable,
-                          onStart: () => post('/sensor/$key/start'),
-                          onStop: () => post('/sensor/$key/stop'),
-                        );
-                      },
+class DataManagementView extends StatelessWidget {
+  const DataManagementView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+
+    return ListView(
+      padding: EdgeInsets.all(ui.pagePadding),
+      children: [
+        Card(
+          elevation: 5,
+          child: Padding(
+            padding: EdgeInsets.all(ui.cardPadding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Data Management',
+                  style: TextStyle(
+                    fontSize: ui.title,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: ui.gap),
+                Text(
+                  'Rosbag management will live here.',
+                  style: TextStyle(
+                    fontSize: ui.subtitle,
+                    color: Colors.grey,
+                  ),
+                ),
+                SizedBox(height: ui.gap),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: ui.icon,
+                      color: Colors.grey,
                     ),
+                    SizedBox(width: ui.gap),
+                    Expanded(
+                      child: Text(
+                        'Planned features: list recorded bag folders, show size/date, select a bag, and later transfer it using rsync or rclone.',
+                        style: TextStyle(
+                          fontSize: ui.status,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(height: ui.gap),
+        Card(
+          child: Padding(
+            padding: EdgeInsets.all(ui.cardPadding),
+            child: Row(
+              children: [
+                Icon(Icons.folder_outlined, size: ui.icon),
+                SizedBox(width: ui.gap),
+                Expanded(
+                  child: Text(
+                    'Bag browser not implemented yet',
+                    style: TextStyle(fontSize: ui.subtitle),
                   ),
-                ],
-              ),
-      ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class LegionControlsView extends StatelessWidget {
+  const LegionControlsView({
+    super.key,
+    required this.onStart,
+    required this.onStop,
+    required this.onRestart,
+  });
+
+  final VoidCallback onStart;
+  final VoidCallback onStop;
+  final VoidCallback onRestart;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+
+    return ListView(
+      padding: EdgeInsets.all(ui.pagePadding),
+      children: [
+        LegionJoystickCard(
+          onStart: onStart,
+          onStop: onStop,
+          onRestart: onRestart,
+        ),
+      ],
     );
   }
 }
@@ -205,54 +423,51 @@ class RecordingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ui = UiScale(context);
     final statusColor = isRecording ? Colors.redAccent : Colors.greenAccent;
 
     return Card(
-      elevation: 8,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      elevation: 5,
+      child: Padding(
+        padding: EdgeInsets.all(ui.cardPadding),
+        child: Row(
           children: [
-            const Text(
-              'Recording',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            Icon(Icons.fiber_manual_record, color: statusColor, size: ui.icon),
+            SizedBox(width: ui.gap),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Recording',
+                    style: TextStyle(
+                      fontSize: ui.title,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isRecording ? 'Recording active' : 'Ready to record',
+                    style: TextStyle(
+                      color: statusColor,
+                      fontSize: ui.status,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Icon(Icons.fiber_manual_record, color: statusColor, size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  isRecording ? 'Recording active' : 'Ready to record',
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+            CompactButton(
+              onPressed: isRecording ? null : onStart,
+              icon: Icons.play_arrow,
+              label: 'Start',
             ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isRecording ? null : onStart,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Start'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: isRecording ? onStop : null,
-                    icon: const Icon(Icons.stop),
-                    label: const Text('Stop'),
-                  ),
-                ),
-              ],
+            SizedBox(width: ui.gap),
+            CompactButton(
+              onPressed: isRecording ? onStop : null,
+              icon: Icons.stop,
+              label: 'Stop',
             ),
           ],
         ),
@@ -261,8 +476,8 @@ class RecordingCard extends StatelessWidget {
   }
 }
 
-class SensorsControlCard extends StatelessWidget {
-  const SensorsControlCard({
+class CameraRtkGridCard extends StatelessWidget {
+  const CameraRtkGridCard({
     super.key,
     required this.runningSensors,
     required this.totalSensors,
@@ -277,6 +492,7 @@ class SensorsControlCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ui = UiScale(context);
     final allRunning = totalSensors > 0 && runningSensors == totalSensors;
     final noneRunning = runningSensors == 0;
 
@@ -293,47 +509,141 @@ class SensorsControlCard extends StatelessWidget {
             : '$runningSensors / $totalSensors systems running';
 
     return Card(
-      elevation: 8,
+      elevation: 5,
       child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: EdgeInsets.all(ui.cardPadding),
+        child: Row(
           children: [
-            const Text(
-              'Camera and RTK Launch',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            Icon(Icons.circle, color: statusColor, size: ui.icon),
+            SizedBox(width: ui.gap),
+            Expanded(
+              child: Column(
+  mainAxisAlignment: MainAxisAlignment.center,
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Text(
+      'Camera + RTK',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        fontSize: ui.subtitle + 1,
+        fontWeight: FontWeight.bold,
+      ),
+    ),
+
+    const SizedBox(height: 4),
+
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.info_outline,
+          size: ui.icon,
+          color: Colors.grey,
+        ),
+        const SizedBox(width: 6),
+        const Expanded(
+          child: Text(
+            'Starts the RealSense camera, Ublox GPS and NTRIP client.',
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.grey,
             ),
-            const SizedBox(height: 16),
-            Row(
+          ),
+        ),
+      ],
+    ),
+
+    const SizedBox(height: 6),
+
+    Text(
+      statusText,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: statusColor,
+        fontSize: ui.subtitle,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  ],
+),
+            ),
+            SizedBox(width: ui.gap),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.circle, color: statusColor, size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  statusText,
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
+                CompactButton(
+                  onPressed: allRunning ? null : onStartAll,
+                  icon: Icons.play_arrow,
+                  label: 'Launch',
+                ),
+                const SizedBox(height: 6),
+                CompactButton(
+                  onPressed: noneRunning ? null : onStopAll,
+                  icon: Icons.stop,
+                  label: 'Stop',
                 ),
               ],
             ),
-            const SizedBox(height: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class LegionJoystickCard extends StatelessWidget {
+  const LegionJoystickCard({
+    super.key,
+    required this.onStart,
+    required this.onStop,
+    required this.onRestart,
+  });
+
+  final VoidCallback onStart;
+  final VoidCallback onStop;
+  final VoidCallback onRestart;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+
+    return Card(
+      elevation: 5,
+      child: Padding(
+        padding: EdgeInsets.all(ui.cardPadding),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Legion Joystick Service',
+              style: TextStyle(fontSize: ui.title, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: ui.gap),
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: allRunning ? null : onStartAll,
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('Launch'),
+                  child: CompactButton(
+                    onPressed: onStart,
+                    icon: Icons.play_arrow,
+                    label: 'Start',
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: ui.gap),
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: noneRunning ? null : onStopAll,
-                    icon: const Icon(Icons.stop),
-                    label: const Text('Stop'),
+                  child: CompactButton(
+                    onPressed: onStop,
+                    icon: Icons.stop,
+                    label: 'Stop',
+                  ),
+                ),
+                SizedBox(width: ui.gap),
+                Expanded(
+                  child: CompactButton(
+                    onPressed: onRestart,
+                    icon: Icons.restart_alt,
+                    label: 'Restart',
                   ),
                 ),
               ],
@@ -341,6 +651,88 @@ class SensorsControlCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class ResponsiveSystemGrid extends StatelessWidget {
+  const ResponsiveSystemGrid({
+    super.key,
+    required this.runningSensors,
+    required this.totalSensors,
+    required this.onStartAll,
+    required this.onStopAll,
+    required this.items,
+    required this.onStart,
+    required this.onStop,
+  });
+
+  final int runningSensors;
+  final int totalSensors;
+  final VoidCallback onStartAll;
+  final VoidCallback onStopAll;
+  final List<MapEntry<String, dynamic>> items;
+  final void Function(String key) onStart;
+  final void Function(String key) onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+
+        final crossAxisCount = width > 1300
+            ? 3
+            : width > 720
+                ? 2
+                : 1;
+
+        final aspectRatio = width > 1300
+            ? 3.2
+            : width > 720
+                ? 2.9
+                : 3.6;
+
+        final cards = <Widget>[
+          CameraRtkGridCard(
+            runningSensors: runningSensors,
+            totalSensors: totalSensors,
+            onStartAll: onStartAll,
+            onStopAll: onStopAll,
+          ),
+          ...items.map((entry) {
+            final key = entry.key;
+            final sensor = entry.value as Map<String, dynamic>;
+
+            final launchable = sensor['launchable'] == true;
+            final running = sensor['running'] == true;
+            final launchedByBackend = sensor['launched_by_backend'] == true;
+
+            return SensorCard(
+              sensorKey: key,
+              displayName: sensor['display_name'] ?? key,
+              rosNodeName: sensor['ros_node_name'] ?? '',
+              running: running,
+              launchedByBackend: launchedByBackend,
+              launchable: launchable,
+              onStart: () => onStart(key),
+              onStop: () => onStop(key),
+            );
+          }),
+        ];
+
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: ui.gap,
+          mainAxisSpacing: ui.gap,
+          childAspectRatio: aspectRatio,
+          children: cards,
+        );
+      },
     );
   }
 }
@@ -369,33 +761,104 @@ class SensorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ui = UiScale(context);
     final statusColor = running ? Colors.greenAccent : Colors.redAccent;
 
     return Card(
-      child: ListTile(
-        leading: Icon(Icons.circle, color: statusColor),
-        title: Text(displayName),
-        subtitle: Text(
-          '$rosNodeName\n${launchedByBackend ? "Launched by backend" : "Detected from ROS"}',
-        ),
-        isThreeLine: true,
-        trailing: launchable
-        ? Wrap(
-            spacing: 8,
-            children: [
-              ElevatedButton(
-                onPressed: running ? null : onStart,
-                child: const Text('Launch'),
+      child: Padding(
+        padding: EdgeInsets.all(ui.cardPadding),
+        child: Row(
+          children: [
+            Icon(Icons.circle, color: statusColor, size: ui.icon),
+            SizedBox(width: ui.gap),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: ui.subtitle + 1,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    rosNodeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: ui.subtitle),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    launchedByBackend ? 'Launched by backend' : 'Detected from ROS',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: ui.subtitle - 1),
+                  ),
+                ],
               ),
-              ElevatedButton(
-                onPressed: running ? onStop : null,
-                child: const Text('Stop'),
+            ),
+            if (launchable) ...[
+              SizedBox(width: ui.gap),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CompactButton(
+                    onPressed: running ? null : onStart,
+                    icon: Icons.play_arrow,
+                    label: 'Start',
+                  ),
+                  const SizedBox(height: 6),
+                  CompactButton(
+                    onPressed: running ? onStop : null,
+                    icon: Icons.stop,
+                    label: 'Stop',
+                  ),
+                ],
               ),
             ],
-          )
-        : null,
-  ) ,
-  );
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class CompactButton extends StatelessWidget {
+  const CompactButton({
+    super.key,
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+  });
+
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+
+    return SizedBox(
+      height: ui.buttonHeight,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: ui.icon),
+        label: Text(
+          label,
+          style: TextStyle(fontSize: ui.subtitle),
+        ),
+        style: ElevatedButton.styleFrom(
+          padding: EdgeInsets.symmetric(horizontal: ui.compact ? 8 : 14),
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
   }
 }
 
@@ -403,42 +866,41 @@ final Map<String, dynamic> mockStatus = {
   "ok": true,
   "recording": false,
   "all_sensors_launch_running": false,
+  "camera_rtk_running_count": 0,
+  "camera_rtk_total_count": 3,
   "sensors": {
-    "ouster": {
-      "display_name": "Ouster 3D Lidar",
-      "ros_node_name": "/a300_00008/os_driver",
-      "running": true,
-      "launched_by_backend": false,
-    },
     "realsense": {
       "display_name": "RealSense D435",
       "ros_node_name": "/camera/camera",
       "running": false,
       "launched_by_backend": false,
+      "launchable": true,
     },
     "ublox": {
       "display_name": "Ublox GPS",
       "ros_node_name": "/ublox_gps_node",
-      "running": true,
+      "running": false,
       "launched_by_backend": false,
+      "launchable": true,
     },
     "ntrip": {
       "display_name": "NTRIP Client",
       "ros_node_name": "/ntrip_client",
-      "running": true,
+      "running": false,
       "launched_by_backend": false,
+      "launchable": true,
     },
+  },
+  "status_only": {
     "imu": {
       "display_name": "IMU",
-      "ros_node_name": "/a300_00008/sensors/imu_0",
-      "running": true,
-      "launched_by_backend": false,
+      "ros_node_name": "/a300_00008/sensors/imu_0/phidgets_spatial",
+      "running": false,
     },
-    "ouster_driver": {
-      "display_name": "Ouster Driver",
-      "ros_node_name": "/a300_00008/ouster_driver",
-      "running": true,
-      "launched_by_backend": false,
+    "lidar": {
+      "display_name": "Ouster 3D Lidar",
+      "ros_node_name": "/a300_00008/sensors/lidar3d_0/ouster_driver",
+      "running": false,
     },
   },
 };
