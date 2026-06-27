@@ -156,7 +156,21 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
         padding: EdgeInsets.all(ui.cardPadding),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+          children: [Row(
+  children: [
+    Icon(Icons.swap_horiz, size: ui.icon),
+    SizedBox(width: ui.gap),
+    Text(
+      'Download',
+      style: TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
+      ),
+    ),
+  ],
+),
+
+SizedBox(height: ui.gap),
             SelectedBagPanel(
               ui: ui,
               bag: selectedBag,

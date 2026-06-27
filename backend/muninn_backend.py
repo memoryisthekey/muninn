@@ -12,6 +12,7 @@ from datetime import datetime
 import time
 import threading
 import getpass
+import shutil
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -254,6 +255,54 @@ def list_bags_from_disk(config):
 
     return bags
 
+
+# Storage helper functions
+def build_disk_usage(path: Path):
+    try:
+        usage = shutil.disk_usage(path)
+        total = usage.total
+        used = usage.used
+        free = usage.free
+
+        used_percent = round((used / total) * 100.0, 1) if total > 0 else 0.0
+        free_percent = round((free / total) * 100.0, 1) if total > 0 else 0.0
+
+        return {
+            "path": str(path),
+            "available": True,
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": free,
+            "total_gb": round(total / (1024 ** 3), 2),
+            "used_gb": round(used / (1024 ** 3), 2),
+            "free_gb": round(free / (1024 ** 3), 2),
+            "used_percent": used_percent,
+            "free_percent": free_percent,
+        }
+    except Exception as e:
+        return {
+            "path": str(path),
+            "available": False,
+            "error": str(e),
+        }
+
+
+def build_storage_status(config, usb_status):
+    bags_dir = get_bags_directory(config)
+
+    storage = {
+        "bags": build_disk_usage(bags_dir),
+        "usb": None,
+    }
+
+    selected_mount = usb_status.get("selected_mount")
+
+    if selected_mount:
+        storage["usb"] = build_disk_usage(Path(selected_mount["path"]))
+
+    return storage
+
+
 # USB helper functions
 def can_write_to_path(path: Path) -> bool:
     test_file = path / ".muninn_write_test"
@@ -404,6 +453,7 @@ def bags():
 def usb_status():
     usb = build_usb_status()
 
+    storage = build_storage_status(config, usb)
     return {
         "ok": True,
         **usb,
@@ -490,6 +540,7 @@ def status():
     status_only = build_status_only(config, current_nodes)
     camera_rtk = managed_camera_rtk_status(config, sensor_status)
     usb = build_usb_status()
+    storage = build_storage_status(config, usb)
 
     return {
         "ok": True,
@@ -516,6 +567,7 @@ def status():
         "last_completed_bag_path": last_completed_bag_path,
         "transfer": transfer_state,
         "usb": usb,
+        "storage": storage,
     }
 
 

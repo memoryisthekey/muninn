@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import 'widgets/bag_browser_card.dart';
+import 'widgets/storage_card.dart';
 
 const bool devMode = false;
 // const String backendUrl = 'http://192.168.131.88:8000';
@@ -319,6 +320,10 @@ class DataManagementView extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.all(ui.pagePadding),
       children: [
+        StorageCard(
+  backendUrl: backendUrl,
+),
+
         SizedBox(height: ui.gap),
         const BagBrowserCard(
   backendUrl: backendUrl,
