@@ -271,11 +271,18 @@ class DashboardView extends StatelessWidget {
       ...statusOnlyNodes,
     ];
 
+    final currentBagName = status['current_bag_name'] as String?;
+    final currentBagPath = status['current_bag_path'] as String?;
+    final lastCompletedBagName = status['last_completed_bag_name'] as String?;
+
     return ListView(
       padding: EdgeInsets.all(ui.pagePadding),
       children: [
         RecordingCard(
           isRecording: recording,
+          currentBagName: currentBagName,
+          currentBagPath: currentBagPath,
+          lastCompletedBagName: lastCompletedBagName,
           onStart: () => onPost('/recording/start'),
           onStop: () => onPost('/recording/stop'),
         ),
@@ -415,16 +422,28 @@ class RecordingCard extends StatelessWidget {
     required this.isRecording,
     required this.onStart,
     required this.onStop,
+    this.currentBagName,
+    this.currentBagPath,
+    this.lastCompletedBagName,
   });
 
   final bool isRecording;
   final VoidCallback onStart;
   final VoidCallback onStop;
+  final String? currentBagName;
+  final String? currentBagPath;
+  final String? lastCompletedBagName;
 
   @override
   Widget build(BuildContext context) {
     final ui = UiScale(context);
     final statusColor = isRecording ? Colors.redAccent : Colors.greenAccent;
+
+    final bagName = isRecording
+        ? currentBagName
+        : lastCompletedBagName ?? currentBagName;
+
+    final bagLabel = isRecording ? 'Current bag' : 'Last bag';
 
     return Card(
       elevation: 5,
@@ -455,6 +474,39 @@ class RecordingCard extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (bagName != null && bagName.isNotEmpty) ...[
+                    SizedBox(height: ui.gap / 2),
+                    Text(
+                      bagLabel,
+                      style: TextStyle(
+                        fontSize: ui.subtitle - 1,
+                        color: Colors.grey,
+                      ),
+                    ),
+                    Text(
+                      bagName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: ui.subtitle,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                  if (isRecording &&
+                      currentBagPath != null &&
+                      currentBagPath!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      currentBagPath!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: ui.subtitle - 2,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -865,6 +917,9 @@ class CompactButton extends StatelessWidget {
 final Map<String, dynamic> mockStatus = {
   "ok": true,
   "recording": false,
+  "current_bag_name": null,
+  "current_bag_path": null,
+  "last_completed_bag_name": "husky_sensor_bag_20260626_230211",
   "all_sensors_launch_running": false,
   "camera_rtk_running_count": 0,
   "camera_rtk_total_count": 3,
