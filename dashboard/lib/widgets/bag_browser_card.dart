@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -21,11 +22,26 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
   String? bagsDirectory;
   List<BagInfo> bags = [];
   BagInfo? selectedBag;
+  Timer? statusTimer;
+  Map<String, dynamic>? transfer;
+  Map<String, dynamic>? usb;
 
   @override
   void initState() {
     super.initState();
     fetchBags();
+    fetchStatus();
+
+    statusTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (_) => fetchStatus(),
+    );
+  }
+
+  @override
+  void dispose() {
+    statusTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> fetchBags() async {
@@ -73,6 +89,31 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
     }
   }
 
+  Future<void> fetchStatus() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${widget.backendUrl}/status'),
+      );
+
+      if (response.statusCode != 200) {
+        return;
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        transfer = data['transfer'] as Map<String, dynamic>?;
+        usb = data['usb'] as Map<String, dynamic>?;
+      });
+    } catch (e) {
+      debugPrint('Transfer status fetch failed: $e');
+    }
+  }
+
   void selectBag(BagInfo bag) {
     setState(() {
       selectedBag = bag;
@@ -83,6 +124,26 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
     setState(() {
       selectedBag = null;
     });
+  }
+
+  Future<void> transferSelectedBagToUsb() async {
+    final bag = selectedBag;
+
+    if (bag == null) {
+      return;
+    }
+
+    final encodedBagName = Uri.encodeComponent(bag.name);
+
+    try {
+      await http.post(
+        Uri.parse('${widget.backendUrl}/bags/transfer/usb/$encodedBagName'),
+      );
+
+      await fetchStatus();
+    } catch (e) {
+      debugPrint('USB transfer failed: $e');
+    }
   }
 
   @override
@@ -99,6 +160,9 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
             SelectedBagPanel(
               ui: ui,
               bag: selectedBag,
+              transfer: transfer,
+              usb: usb,
+              onTransferUsb: transferSelectedBagToUsb,
               onClear: clearSelectedBag,
             ),
             SizedBox(height: ui.sectionGap),
@@ -402,11 +466,17 @@ class SelectedBagPanel extends StatelessWidget {
     super.key,
     required this.ui,
     required this.bag,
+    required this.transfer,
+    required this.usb,
+    required this.onTransferUsb,
     required this.onClear,
   });
 
   final BagUiScale ui;
   final BagInfo? bag;
+  final Map<String, dynamic>? transfer;
+  final Map<String, dynamic>? usb;
+  final VoidCallback onTransferUsb;
   final VoidCallback onClear;
 
   @override
@@ -434,6 +504,9 @@ class SelectedBagPanel extends StatelessWidget {
           : _SelectedBagDetails(
               ui: ui,
               bag: selected,
+              transfer: transfer,
+              usb: usb,
+              onTransferUsb: onTransferUsb,
               onClear: onClear,
             ),
     );
@@ -484,17 +557,45 @@ class _SelectedBagDetails extends StatelessWidget {
   const _SelectedBagDetails({
     required this.ui,
     required this.bag,
+    required this.transfer,
+    required this.usb,
+    required this.onTransferUsb,
     required this.onClear,
   });
 
   final BagUiScale ui;
   final BagInfo bag;
+  final Map<String, dynamic>? transfer;
+  final Map<String, dynamic>? usb;
+  final VoidCallback onTransferUsb;
   final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
     final canTransfer = bag.transferAllowed && !bag.recording;
+    final transferActive = transfer?['active'] == true;
+    final transferStatus = transfer?['status']?.toString() ?? 'idle';
+    final transferBagName = transfer?['bag_name']?.toString();
+    final transferProgressRaw = transfer?['progress'];
+    final transferProgress = transferProgressRaw is num
+        ? transferProgressRaw.toDouble()
+        : 0.0;
+    final transferSpeed = transfer?['speed']?.toString();
+    final transferError = transfer?['error']?.toString();
+    final usbWritable = usb?['writable'] == true;
 
+    final thisBagIsTransferring = transferActive && transferBagName == bag.name;
+    final thisBagCompleted =
+        !transferActive && transferStatus == 'completed' && transferBagName == bag.name;
+    final thisBagFailed =
+        !transferActive && transferStatus == 'failed' && transferBagName == bag.name;
+    final showTransferProgress =
+        thisBagIsTransferring || thisBagCompleted || thisBagFailed;
+    final transferDisabled =
+        !canTransfer ||
+        transferActive ||
+        !usbWritable;
+        
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -546,6 +647,33 @@ class _SelectedBagDetails extends StatelessWidget {
             color: Colors.grey,
           ),
         ),
+        if (showTransferProgress) ...[
+          SizedBox(height: ui.gap),
+          LinearProgressIndicator(
+            value: transferProgress.clamp(0.0, 100.0) / 100.0,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            thisBagFailed
+              ? 'USB transfer failed: ${transferError ?? "Unknown error"}'
+                : transferStatus == 'finalizing'
+                  ? 'Finalizing... Do not remove the USB drive.'
+                  : thisBagCompleted
+                    ? 'USB transfer completed'
+                    : transferStatus == 'preparing'
+                      ? 'Preparing transfer...'
+                      : 'USB transferring ${transferProgress.toStringAsFixed(0)}%'
+                  '${transferSpeed != null ? " • $transferSpeed" : ""}',
+            style: TextStyle(
+              fontSize: ui.caption,
+              color: thisBagFailed
+                  ? Colors.redAccent
+                  : thisBagCompleted
+                      ? Colors.greenAccent
+                      : Colors.grey,
+            ),
+          ),
+        ],
         SizedBox(height: ui.gap),
         Row(
           children: [
@@ -553,9 +681,11 @@ class _SelectedBagDetails extends StatelessWidget {
               child: Text(
                 bag.recording
                     ? 'This bag is currently recording and cannot be transferred yet.'
-                    : canTransfer
-                        ? 'Transfer options will be added next.'
-                        : 'Transfer is disabled for this bag.',
+                    : transferActive && !thisBagIsTransferring
+                        ? 'Another transfer is already running.'
+                        : canTransfer
+                            ? 'Ready to transfer to USB.'
+                            : 'Transfer is disabled for this bag.',
                 style: TextStyle(
                   fontSize: ui.caption,
                   color: bag.recording ? Colors.redAccent : Colors.grey,
@@ -578,10 +708,10 @@ class _SelectedBagDetails extends StatelessWidget {
             SizedBox(
               height: ui.buttonHeight,
               child: ElevatedButton.icon(
-                onPressed: null,
+                onPressed: transferDisabled ? null : onTransferUsb,
                 icon: Icon(Icons.drive_folder_upload, size: ui.icon),
                 label: Text(
-                  'Transfer',
+                  'USB Transfer',
                   style: TextStyle(fontSize: ui.caption),
                 ),
               ),

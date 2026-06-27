@@ -10,7 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import time
-import shutil
+import threading
+import getpass
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,6 +33,20 @@ current_bag_path = None
 recording_start_time = None
 last_completed_bag_name = None
 last_completed_bag_path = None
+
+transfer_state = {
+    "active": False,
+    "method": None,
+    "bag_name": None,
+    "source_path": None,
+    "destination_path": None,
+    "destination_type": None,
+    "status": "idle",
+    "progress": 0.0,
+    "speed": None,
+    "current": None,
+    "error": None,
+}
 
 def load_config():
     with open(CONFIG_FILE, "r") as f:
@@ -239,6 +254,142 @@ def list_bags_from_disk(config):
 
     return bags
 
+# USB helper functions
+def can_write_to_path(path: Path) -> bool:
+    test_file = path / ".muninn_write_test"
+
+    try:
+        test_file.write_text("test")
+        test_file.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def get_usb_mounts():
+    user = getpass.getuser()
+
+    candidates = [
+        Path(f"/media/{user}"),
+        Path(f"/run/media/{user}"),
+    ]
+
+    mounts = []
+
+    for base in candidates:
+        if not base.exists():
+            continue
+
+        for item in base.iterdir():
+            if not item.is_dir():
+                continue
+
+            mounts.append({
+                "name": item.name,
+                "path": str(item),
+                "writable": can_write_to_path(item),
+            })
+
+    return mounts
+
+
+def get_first_writable_usb_mount():
+    for mount in get_usb_mounts():
+        if mount.get("writable") is True:
+            return Path(mount["path"])
+
+    return None
+
+
+def build_usb_status():
+    mounts = get_usb_mounts()
+    writable_mounts = [
+        mount for mount in mounts
+        if mount.get("writable") is True
+    ]
+
+    return {
+        "connected": len(mounts) > 0,
+        "writable": len(writable_mounts) > 0,
+        "mounts": mounts,
+        "selected_mount": writable_mounts[0] if writable_mounts else None,
+    }
+
+def run_rsync_transfer(
+    source: Path,
+    destination_parent: Path,
+    method: str,
+    destination_type: str = "local",
+):
+    global transfer_state
+
+    try:
+        transfer_state["method"] = method
+        transfer_state["destination_type"] = destination_type
+        transfer_state["status"] = "transferring"
+        transfer_state["progress"] = 0.0
+        transfer_state["speed"] = None
+        transfer_state["current"] = "Starting transfer"
+        transfer_state["error"] = None
+
+        destination_parent.mkdir(parents=True, exist_ok=True)
+
+        total_size = folder_size_bytes(source)
+        destination_path = destination_parent / source.name
+
+        cmd = [
+            "rsync",
+            "-a",
+            "--delete",
+            str(source),
+            str(destination_parent),
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        while process.poll() is None:
+            copied_size = folder_size_bytes(destination_path)
+
+            if total_size > 0:
+                progress = min((copied_size / total_size) * 100.0, 99.0)
+            else:
+                progress = 0.0
+
+            transfer_state["progress"] = progress
+            transfer_state["current"] = "Copying files"
+
+            time.sleep(0.5)
+
+        _, stderr = process.communicate()
+
+        if process.returncode != 0:
+            transfer_state["status"] = "failed"
+            transfer_state["error"] = stderr
+            return
+
+        transfer_state["status"] = "finalizing"
+        transfer_state["progress"] = 100.0
+        transfer_state["current"] = "Finalizing transfer"
+
+        subprocess.run(["sync"], check=False)
+
+        transfer_state["status"] = "completed"
+        transfer_state["progress"] = 100.0
+        transfer_state["current"] = "Transfer completed"
+        transfer_state["error"] = None
+
+    except Exception as e:
+        transfer_state["status"] = "failed"
+        transfer_state["error"] = str(e)
+
+    finally:
+        transfer_state["active"] = False
+
 @app.get("/bags")
 def bags():
     config = load_config()
@@ -249,6 +400,87 @@ def bags():
         "bags": list_bags_from_disk(config),
     }
 
+@app.get("/usb")
+def usb_status():
+    usb = build_usb_status()
+
+    return {
+        "ok": True,
+        **usb,
+    }
+
+@app.post("/bags/transfer/usb/{bag_name}")
+def transfer_bag_to_usb(bag_name: str):
+    global transfer_state
+
+    if is_alive(recording_process):
+        return {
+            "ok": False,
+            "error": "Cannot transfer while recording",
+        }
+
+    if transfer_state["active"]:
+        return {
+            "ok": False,
+            "error": "Transfer already active",
+        }
+
+    config = load_config()
+    bags_dir = get_bags_directory(config)
+    bag_path = bags_dir / bag_name
+
+    if not bag_path.exists() or not bag_path.is_dir():
+        return {
+            "ok": False,
+            "error": f"Bag not found: {bag_name}",
+        }
+
+    usb_path = get_first_writable_usb_mount()
+
+    if usb_path is None:
+        return {
+            "ok": False,
+            "error": "No writable USB drive detected",
+        }
+
+    destination_parent = usb_path / "muninn_bags"
+    destination_path = destination_parent / bag_name
+
+    transfer_state = {
+        "active": True,
+        "method": None,
+        "destination_type": "local",
+        "bag_name": bag_name,
+        "source_path": str(bag_path),
+        "destination_path": str(destination_path),
+        "status": "preparing",
+        "progress": 0.0,
+        "speed": None,
+        "current": "Preparing transfer",
+        "error": None,
+    }
+
+    thread = threading.Thread(
+        target=run_rsync_transfer,
+        args=(
+            bag_path,
+            destination_parent,
+            "usb",
+            "local",
+        ),
+        daemon=True,
+    )
+    thread.start()
+
+    usb = build_usb_status()
+
+    return {
+        "ok": True,
+        "status": "USB transfer started",
+        "transfer": transfer_state,
+        "usb": usb,
+    }
+
 @app.get("/status")
 def status():
     config = load_config()
@@ -257,6 +489,7 @@ def status():
     sensor_status = build_sensor_status(config, current_nodes)
     status_only = build_status_only(config, current_nodes)
     camera_rtk = managed_camera_rtk_status(config, sensor_status)
+    usb = build_usb_status()
 
     return {
         "ok": True,
@@ -281,6 +514,8 @@ def status():
         "recording_start_time": recording_start_time,
         "last_completed_bag_name": last_completed_bag_name,
         "last_completed_bag_path": last_completed_bag_path,
+        "transfer": transfer_state,
+        "usb": usb,
     }
 
 
