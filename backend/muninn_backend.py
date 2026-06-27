@@ -8,6 +8,9 @@ from pathlib import Path
 import yaml
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+import time
+import shutil
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -24,7 +27,11 @@ app.add_middleware(
 
 processes = {}
 recording_process = None
-
+current_bag_name = None
+current_bag_path = None
+recording_start_time = None
+last_completed_bag_name = None
+last_completed_bag_path = None
 
 def load_config():
     with open(CONFIG_FILE, "r") as f:
@@ -173,6 +180,74 @@ def list_ros_nodes():
         "nodes": nodes,
     }
 
+def get_bags_directory(config):
+    return Path(
+        config["recording"].get(
+            "bags_directory",
+            "~/ros2_ws/src/muninn_ros/bags",
+        )
+    ).expanduser()
+
+
+def folder_size_bytes(path: Path) -> int:
+    total = 0
+
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+
+    return total
+
+
+def list_bags_from_disk(config):
+    bags_dir = get_bags_directory(config)
+
+    if not bags_dir.exists():
+        return []
+
+    bag_dirs = [
+        path for path in bags_dir.iterdir()
+        if path.is_dir()
+    ]
+
+    bag_dirs.sort(
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    bags = []
+
+    for index, bag_dir in enumerate(bag_dirs):
+        stat = bag_dir.stat()
+        size_bytes = folder_size_bytes(bag_dir)
+
+        bags.append({
+            "name": bag_dir.name,
+            "path": str(bag_dir),
+            "size_bytes": size_bytes,
+            "size_gb": round(size_bytes / (1024 ** 3), 3),
+            "modified": datetime.fromtimestamp(
+                stat.st_mtime
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "latest": index == 0,
+            "recording": bag_dir.name == current_bag_name,
+            "transfer_allowed": bag_dir.name != current_bag_name,
+        })
+
+    return bags
+
+@app.get("/bags")
+def bags():
+    config = load_config()
+
+    return {
+        "ok": True,
+        "bags_directory": str(get_bags_directory(config)),
+        "bags": list_bags_from_disk(config),
+    }
 
 @app.get("/status")
 def status():
@@ -201,6 +276,11 @@ def status():
         "sensors": sensor_status,
         "status_only": status_only,
         "recording": is_alive(recording_process),
+        "current_bag_name": current_bag_name,
+        "current_bag_path": current_bag_path,
+        "recording_start_time": recording_start_time,
+        "last_completed_bag_name": last_completed_bag_name,
+        "last_completed_bag_path": last_completed_bag_path,
     }
 
 
@@ -365,15 +445,32 @@ def stop_sensor(sensor_key: str):
 @app.post("/recording/start")
 def start_recording():
     global recording_process
+    global current_bag_name
+    global current_bag_path
+    global recording_start_time
 
     if is_alive(recording_process):
         return {
             "ok": True,
             "status": "already recording",
+            "current_bag_name": current_bag_name,
+            "current_bag_path": current_bag_path,
         }
 
     config = load_config()
-    command = config["recording"]["command"]
+
+    bags_dir = Path(
+        config["recording"].get(
+            "bags_directory",
+            "~/ros2_ws/src/muninn_ros/bags",
+        )
+    ).expanduser()
+
+    current_bag_name = f"husky_sensor_bag_{datetime.now():%Y%m%d_%H%M%S}"
+    current_bag_path = str(bags_dir / current_bag_name)
+    recording_start_time = time.time()
+
+    command = f'{config["recording"]["command"]} "{current_bag_name}"'
 
     recording_process = start_process(command)
 
@@ -381,23 +478,41 @@ def start_recording():
         "ok": True,
         "status": "recording started",
         "pid": recording_process.pid,
+        "current_bag_name": current_bag_name,
+        "current_bag_path": current_bag_path,
+        "recording_start_time": recording_start_time,
     }
-
 
 @app.post("/recording/stop")
 def stop_recording():
     global recording_process
+    global current_bag_name
+    global current_bag_path
+    global recording_start_time
+    global last_completed_bag_name
+    global last_completed_bag_path
 
     if not is_alive(recording_process):
         return {
             "ok": True,
             "status": "not recording",
+            "last_completed_bag_name": last_completed_bag_name,
+            "last_completed_bag_path": last_completed_bag_path,
         }
 
     stop_process(recording_process)
     recording_process = None
 
+    last_completed_bag_name = current_bag_name
+    last_completed_bag_path = current_bag_path
+
+    current_bag_name = None
+    current_bag_path = None
+    recording_start_time = None
+
     return {
         "ok": True,
         "status": "recording stopped",
+        "last_completed_bag_name": last_completed_bag_name,
+        "last_completed_bag_path": last_completed_bag_path,
     }

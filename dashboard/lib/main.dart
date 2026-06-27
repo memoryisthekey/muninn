@@ -5,10 +5,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const bool devMode = true;
-// const String backendUrl = 'http://192.168.131.88:8000';
-const String backendUrl = 'http://192.168.76.88:8000';
+import 'widgets/bag_browser_card.dart';
 
+const bool devMode = false;
+// const String backendUrl = 'http://192.168.131.88:8000';
+// const String backendUrl = 'http://192.168.76.88:8000';
+const String backendUrl = 'http://127.0.0.1:8000';
 void main() {
   runApp(const MuninnApp());
 }
@@ -317,71 +319,10 @@ class DataManagementView extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.all(ui.pagePadding),
       children: [
-        Card(
-          elevation: 5,
-          child: Padding(
-            padding: EdgeInsets.all(ui.cardPadding),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Data Management',
-                  style: TextStyle(
-                    fontSize: ui.title,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                SizedBox(height: ui.gap),
-                Text(
-                  'Rosbag management will live here.',
-                  style: TextStyle(
-                    fontSize: ui.subtitle,
-                    color: Colors.grey,
-                  ),
-                ),
-                SizedBox(height: ui.gap),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.info_outline,
-                      size: ui.icon,
-                      color: Colors.grey,
-                    ),
-                    SizedBox(width: ui.gap),
-                    Expanded(
-                      child: Text(
-                        'Planned features: list recorded bag folders, show size/date, select a bag, and later transfer it using rsync or rclone.',
-                        style: TextStyle(
-                          fontSize: ui.status,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
         SizedBox(height: ui.gap),
-        Card(
-          child: Padding(
-            padding: EdgeInsets.all(ui.cardPadding),
-            child: Row(
-              children: [
-                Icon(Icons.folder_outlined, size: ui.icon),
-                SizedBox(width: ui.gap),
-                Expanded(
-                  child: Text(
-                    'Bag browser not implemented yet',
-                    style: TextStyle(fontSize: ui.subtitle),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        const BagBrowserCard(
+  backendUrl: backendUrl,
+),
       ],
     );
   }

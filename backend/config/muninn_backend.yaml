@@ -44,3 +44,5 @@ status_only:
 
 recording:
   command: ~/ros2_ws/src/muninn_ros/scripts/record_husky.bash
+  #bags_directory: /home/husky/ros2_ws/src/muninn_ros/bags
+  bags_directory: /home/legion/ros2_ws/src/muninn_ros/bags
