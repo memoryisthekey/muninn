@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'widgets/bag_browser_card.dart';
 import 'widgets/storage_card.dart';
+import 'widgets/battery_indicator.dart';
 
 const bool devMode = false;
 // const String backendUrl = 'http://192.168.131.88:8000';
@@ -178,7 +179,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final ui = UiScale(context);
-    final tabCount = isLegion ? 3 : 2;
+    final tabCount = isLegion ? 4 : 3;
 
     return DefaultTabController(
       length: tabCount,
@@ -198,7 +199,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     Tab(
                       height: ui.tabHeight,
                       child: Text(
-                        'Muninn',
+                        'Dashboard',
                         style: TextStyle(fontSize: ui.compact ? 13 : 15),
                       ),
                     ),
@@ -207,6 +208,13 @@ class _DashboardPageState extends State<DashboardPage> {
                       child: Text(
                         'Data',
                         style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                      ),
+                    ),
+                    Tab(
+                      height: ui.tabHeight,
+                      child: BatteryTabLabel(
+                        battery: status?['battery'] as Map<String, dynamic>?,
+                        fontSize: ui.compact ? 13 : 15,
                       ),
                     ),
                     if (isLegion)
@@ -232,6 +240,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     onPost: post,
                   ),
                   const DataManagementView(),
+                  DiagnosticsView(status: status!),
                   if (isLegion)
                     LegionControlsView(
                       onStart: () => runLegionJoystickCommand('start'),
@@ -240,6 +249,130 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                 ],
               ),
+      ),
+    );
+  }
+}
+
+class BatteryTabLabel extends StatelessWidget {
+  const BatteryTabLabel({
+    super.key,
+    required this.battery,
+    required this.fontSize,
+  });
+
+  final Map<String, dynamic>? battery;
+  final double fontSize;
+
+  IconData get icon {
+    final percentage = battery?['percentage'];
+
+    if (percentage is! num) {
+      return Icons.battery_unknown;
+    }
+
+    final value = percentage.clamp(0, 100).toInt();
+
+    if (value >= 90) return Icons.battery_full;
+    if (value >= 60) return Icons.battery_5_bar;
+    if (value >= 40) return Icons.battery_4_bar;
+    if (value >= 20) return Icons.battery_2_bar;
+    return Icons.battery_alert;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: fontSize + 5),
+        const SizedBox(width: 5),
+        Text(
+          battery?['percentage'] is num
+              ? '${(battery!['percentage'] as num).toInt()}%  Diagnostics'
+              : '--%  Diagnostics',
+          style: TextStyle(fontSize: fontSize),
+        ),
+      ],
+    );
+  }
+}
+
+class DiagnosticsView extends StatelessWidget {
+  const DiagnosticsView({
+    super.key,
+    required this.status,
+  });
+
+  final Map<String, dynamic> status;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+    final battery = status['battery'] as Map<String, dynamic>?;
+
+    return ListView(
+      padding: EdgeInsets.all(ui.pagePadding),
+      children: [
+        Text(
+          'Diagnostics',
+          style: TextStyle(fontSize: ui.title, fontWeight: FontWeight.w600),
+        ),
+        SizedBox(height: ui.gap),
+        BatteryStatusCard(battery: battery),
+      ],
+    );
+  }
+}
+
+class BatteryStatusCard extends StatelessWidget {
+  const BatteryStatusCard({
+    super.key,
+    required this.battery,
+  });
+
+  final Map<String, dynamic>? battery;
+
+  @override
+  Widget build(BuildContext context) {
+    final ui = UiScale(context);
+    final percentage = battery?['percentage'];
+    final available = percentage is num;
+    final value = available ? percentage.clamp(0, 100).toInt() : null;
+
+    return Card(
+      elevation: 5,
+      child: Padding(
+        padding: EdgeInsets.all(ui.cardPadding),
+        child: Row(
+          children: [
+            BatteryIndicator(battery: battery),
+            SizedBox(width: ui.gap),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Robot Battery',
+                    style: TextStyle(
+                      fontSize: ui.title,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    available ? '$value%' : 'Unavailable',
+                    style: TextStyle(
+                      fontSize: ui.status,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -891,6 +1024,9 @@ final Map<String, dynamic> mockStatus = {
       "launched_by_backend": false,
       "launchable": true,
     },
+  },
+  "battery": {
+    "percentage": 84,
   },
   "status_only": {
     "imu": {

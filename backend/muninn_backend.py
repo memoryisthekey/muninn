@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 import signal
 import subprocess
@@ -49,6 +50,10 @@ transfer_state = {
     "error": None,
 }
 
+muninn_monitor_status = {}
+muninn_monitor_lock = threading.Lock()
+
+
 def load_config():
     with open(CONFIG_FILE, "r") as f:
         return yaml.safe_load(f)
@@ -87,6 +92,64 @@ def run_bash(command: str):
         executable="/bin/bash",
         env=bash_env(),
     )
+
+
+def muninn_status_listener():
+    global muninn_monitor_status
+
+    command = "ros2 topic echo /muninn/status std_msgs/msg/String"
+
+    while True:
+        try:
+            process = subprocess.Popen(
+                ros_shell(command),
+                shell=True,
+                executable="/bin/bash",
+                env=bash_env(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+
+            current_msg = ""
+
+            for line in process.stdout:
+                if line.strip() == "---":
+                    try:
+                        parsed = yaml.safe_load(current_msg)
+
+                        if isinstance(parsed, dict):
+                            data = parsed.get("data")
+
+                            if data:
+                                with muninn_monitor_lock:
+                                    muninn_monitor_status = json.loads(data)
+
+                    except Exception:
+                        pass
+
+                    current_msg = ""
+                else:
+                    current_msg += line
+
+            try:
+                process.wait(timeout=1)
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+        time.sleep(2)
+
+
+@app.on_event("startup")
+def start_muninn_status_listener():
+    thread = threading.Thread(
+        target=muninn_status_listener,
+        daemon=True,
+    )
+    thread.start()
 
 
 def start_process(command: str):
@@ -542,6 +605,17 @@ def status():
     usb = build_usb_status()
     storage = build_storage_status(config, usb)
 
+    with muninn_monitor_lock:
+        monitor_status = dict(muninn_monitor_status)
+
+    battery = monitor_status.get(
+        "battery",
+        {
+            "available": False,
+            "percentage": None,
+        },
+    )
+
     return {
         "ok": True,
         "ros_nodes_visible": current_nodes,
@@ -568,6 +642,8 @@ def status():
         "transfer": transfer_state,
         "usb": usb,
         "storage": storage,
+        "battery": battery,
+        "muninn_monitor_available": bool(monitor_status),
     }
 
 
