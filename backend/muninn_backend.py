@@ -50,6 +50,14 @@ transfer_state = {
     "error": None,
 }
 
+battery_status = {
+    "available": False,
+    "percentage": None,
+}
+battery_lock = threading.Lock()
+
+# Kept for future diagnostics, but battery is currently read directly by
+# the backend background worker instead of through /muninn/status.
 muninn_monitor_status = {}
 muninn_monitor_lock = threading.Lock()
 
@@ -93,6 +101,63 @@ def run_bash(command: str):
         env=bash_env(),
     )
 
+
+def update_battery_loop():
+    global battery_status
+
+    command = "ros2 topic echo /a300_00008/platform/bms/state --once"
+
+    while True:
+        next_status = {
+            "available": False,
+            "percentage": None,
+        }
+
+        try:
+            output = run_bash(command)
+
+            # ros2 topic echo appends a YAML document separator.
+            # Keep only the first document.
+            first_document = output.split("---", 1)[0]
+            data = yaml.safe_load(first_document)
+
+            if isinstance(data, dict):
+                percentage = data.get("percentage")
+
+                if percentage is not None and float(percentage) >= 0.0:
+                    next_status = {
+                        "available": True,
+                        "percentage": round(float(percentage) * 100),
+                    }
+
+        except Exception:
+            next_status = {
+                "available": False,
+                "percentage": None,
+            }
+
+        with battery_lock:
+            battery_status = next_status
+
+        time.sleep(5)
+
+
+def ensure_node_monitor_running(config):
+    key = "node_monitor"
+
+    if key in processes and is_alive(processes[key]):
+        return True
+
+    command = config.get("node_monitor", {}).get(
+        "command",
+        "ros2 run muninn_ros node_monitor",
+    )
+
+    try:
+        processes[key] = start_process(command)
+        return True
+    except Exception:
+        return False
 
 def muninn_status_listener():
     global muninn_monitor_status
@@ -144,12 +209,12 @@ def muninn_status_listener():
 
 
 @app.on_event("startup")
-def start_muninn_status_listener():
-    thread = threading.Thread(
-        target=muninn_status_listener,
+def start_background_workers():
+    battery_thread = threading.Thread(
+        target=update_battery_loop,
         daemon=True,
     )
-    thread.start()
+    battery_thread.start()
 
 
 def start_process(command: str):
@@ -505,7 +570,7 @@ def run_rsync_transfer(
 @app.get("/bags")
 def bags():
     config = load_config()
-
+    
     return {
         "ok": True,
         "bags_directory": str(get_bags_directory(config)),
@@ -605,16 +670,8 @@ def status():
     usb = build_usb_status()
     storage = build_storage_status(config, usb)
 
-    with muninn_monitor_lock:
-        monitor_status = dict(muninn_monitor_status)
-
-    battery = monitor_status.get(
-        "battery",
-        {
-            "available": False,
-            "percentage": None,
-        },
-    )
+    with battery_lock:
+        battery = dict(battery_status)
 
     return {
         "ok": True,
@@ -643,7 +700,6 @@ def status():
         "usb": usb,
         "storage": storage,
         "battery": battery,
-        "muninn_monitor_available": bool(monitor_status),
     }
 
 
