@@ -56,12 +56,6 @@ battery_status = {
 }
 battery_lock = threading.Lock()
 
-# Kept for future diagnostics, but battery is currently read directly by
-# the backend background worker instead of through /muninn/status.
-muninn_monitor_status = {}
-muninn_monitor_lock = threading.Lock()
-
-
 def load_config():
     with open(CONFIG_FILE, "r") as f:
         return yaml.safe_load(f)
@@ -141,75 +135,8 @@ def update_battery_loop():
 
         time.sleep(5)
 
-
-def ensure_node_monitor_running(config):
-    key = "node_monitor"
-
-    if key in processes and is_alive(processes[key]):
-        return True
-
-    command = config.get("node_monitor", {}).get(
-        "command",
-        "ros2 run muninn_ros node_monitor",
-    )
-
-    try:
-        processes[key] = start_process(command)
-        return True
-    except Exception:
-        return False
-
-def muninn_status_listener():
-    global muninn_monitor_status
-
-    command = "ros2 topic echo /muninn/status std_msgs/msg/String"
-
-    while True:
-        try:
-            process = subprocess.Popen(
-                ros_shell(command),
-                shell=True,
-                executable="/bin/bash",
-                env=bash_env(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-
-            current_msg = ""
-
-            for line in process.stdout:
-                if line.strip() == "---":
-                    try:
-                        parsed = yaml.safe_load(current_msg)
-
-                        if isinstance(parsed, dict):
-                            data = parsed.get("data")
-
-                            if data:
-                                with muninn_monitor_lock:
-                                    muninn_monitor_status = json.loads(data)
-
-                    except Exception:
-                        pass
-
-                    current_msg = ""
-                else:
-                    current_msg += line
-
-            try:
-                process.wait(timeout=1)
-            except Exception:
-                pass
-
-        except Exception:
-            pass
-
-        time.sleep(2)
-
-
 @app.on_event("startup")
-def start_background_workers():
+def start_battery_worker():
     battery_thread = threading.Thread(
         target=update_battery_loop,
         daemon=True,
