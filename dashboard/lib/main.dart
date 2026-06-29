@@ -10,8 +10,8 @@ import 'widgets/storage_card.dart';
 import 'widgets/battery_indicator.dart';
 
 const bool devMode = false; // set false for prod
-const String backendUrl = 'http://192.168.131.88:8000';
-// const String backendUrl = 'http://192.168.76.88:8000';
+//const String backendUrl = 'http://192.168.131.88:8000';
+const String backendUrl = 'http://192.168.76.88:8000';
 //const String backendUrl = 'http://127.0.0.1:8000';
 void main() {
   runApp(const MuninnApp());
@@ -70,8 +70,40 @@ class _DashboardPageState extends State<DashboardPage> {
   Map<String, dynamic>? status;
   Timer? timer;
 
+  bool legionJoystickRunning = false;
+  String legionJoystickStatus = 'unknown';
+
   bool get isLegion {
     return Platform.localHostname.toLowerCase().contains('legion');
+  }
+
+  Future<void> fetchLegionJoystickStatus() async {
+    if (!isLegion) return;
+
+    try {
+      final result = await Process.run(
+        'systemctl',
+        ['is-active', 'legion_joystick_node.service'],
+      );
+
+      final serviceStatus = result.stdout.toString().trim();
+
+      if (!mounted) return;
+
+      setState(() {
+        legionJoystickStatus = serviceStatus.isEmpty ? 'unknown' : serviceStatus;
+        legionJoystickRunning = serviceStatus == 'active';
+      });
+    } catch (e) {
+      debugPrint('Joystick status check failed: $e');
+
+      if (!mounted) return;
+
+      setState(() {
+        legionJoystickStatus = 'unknown';
+        legionJoystickRunning = false;
+      });
+    }
   }
 
   Future<void> runLegionJoystickCommand(String action) async {
@@ -97,6 +129,8 @@ class _DashboardPageState extends State<DashboardPage> {
       debugPrint('Joystick service command error: $e');
     }
 
+    await Future.delayed(const Duration(milliseconds: 500));
+    await fetchLegionJoystickStatus();
     await fetchStatus();
   }
 
@@ -121,6 +155,8 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         status = Map<String, dynamic>.from(mockStatus);
       });
+
+      await fetchLegionJoystickStatus();
       return;
     }
 
@@ -132,6 +168,8 @@ class _DashboardPageState extends State<DashboardPage> {
           status = jsonDecode(response.body);
         });
       }
+
+      await fetchLegionJoystickStatus();
     } catch (e) {
       debugPrint('Status fetch failed: $e');
     }
@@ -243,6 +281,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   DiagnosticsView(status: status!),
                   if (isLegion)
                     LegionControlsView(
+                      running: legionJoystickRunning,
+                      serviceStatus: legionJoystickStatus,
                       onStart: () => runLegionJoystickCommand('start'),
                       onStop: () => runLegionJoystickCommand('stop'),
                       onRestart: () => runLegionJoystickCommand('restart'),
@@ -469,11 +509,15 @@ class DataManagementView extends StatelessWidget {
 class LegionControlsView extends StatelessWidget {
   const LegionControlsView({
     super.key,
+    required this.running,
+    required this.serviceStatus,
     required this.onStart,
     required this.onStop,
     required this.onRestart,
   });
 
+  final bool running;
+  final String serviceStatus;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onRestart;
@@ -486,6 +530,8 @@ class LegionControlsView extends StatelessWidget {
       padding: EdgeInsets.all(ui.pagePadding),
       children: [
         LegionJoystickCard(
+          running: running,
+          serviceStatus: serviceStatus,
           onStart: onStart,
           onStop: onStop,
           onRestart: onRestart,
@@ -727,11 +773,15 @@ class CameraRtkGridCard extends StatelessWidget {
 class LegionJoystickCard extends StatelessWidget {
   const LegionJoystickCard({
     super.key,
+    required this.running,
+    required this.serviceStatus,
     required this.onStart,
     required this.onStop,
     required this.onRestart,
   });
 
+  final bool running;
+  final String serviceStatus;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onRestart;
@@ -739,6 +789,8 @@ class LegionJoystickCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ui = UiScale(context);
+    final statusColor = running ? Colors.greenAccent : Colors.redAccent;
+    final statusText = running ? 'Running' : 'Stopped';
 
     return Card(
       elevation: 5,
@@ -754,9 +806,23 @@ class LegionJoystickCard extends StatelessWidget {
             SizedBox(height: ui.gap),
             Row(
               children: [
+                Icon(Icons.circle, size: ui.icon, color: statusColor),
+                const SizedBox(width: 8),
+                Text(
+                  '$statusText ($serviceStatus)',
+                  style: TextStyle(
+                    fontSize: ui.status,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: ui.gap),
+            Row(
+              children: [
                 Expanded(
                   child: CompactButton(
-                    onPressed: onStart,
+                    onPressed: running ? null : onStart,
                     icon: Icons.play_arrow,
                     label: 'Start',
                   ),
@@ -764,7 +830,7 @@ class LegionJoystickCard extends StatelessWidget {
                 SizedBox(width: ui.gap),
                 Expanded(
                   child: CompactButton(
-                    onPressed: onStop,
+                    onPressed: running ? onStop : null,
                     icon: Icons.stop,
                     label: 'Stop',
                   ),
