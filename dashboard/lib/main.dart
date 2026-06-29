@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'widgets/bag_browser_card.dart';
 import 'widgets/storage_card.dart';
 import 'widgets/battery_indicator.dart';
+import 'widgets/legion.dart';
 
 const bool devMode = false; // set false for prod
 //const String backendUrl = 'http://192.168.131.88:8000';
@@ -69,9 +70,9 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   Map<String, dynamic>? status;
   Timer? timer;
-
   bool legionJoystickRunning = false;
   String legionJoystickStatus = 'unknown';
+  bool refreshingStatus = false;
 
   bool get isLegion {
     return Platform.localHostname.toLowerCase().contains('legion');
@@ -150,18 +151,40 @@ class _DashboardPageState extends State<DashboardPage> {
     super.dispose();
   }
 
+  Future<void> refreshDashboardStatus() async {
+    if (refreshingStatus) return;
+
+    setState(() {
+      refreshingStatus = true;
+    });
+
+    await fetchStatus();
+
+    if (!mounted) return;
+
+    setState(() {
+      refreshingStatus = false;
+    });
+  }
+
   Future<void> fetchStatus() async {
-    if (devMode) {
-      setState(() {
-        status = Map<String, dynamic>.from(mockStatus);
-      });
-
-      await fetchLegionJoystickStatus();
-      return;
-    }
-
     try {
-      final response = await http.get(Uri.parse('$backendUrl/status'));
+      if (devMode) {
+        if (!mounted) return;
+
+        setState(() {
+          status = Map<String, dynamic>.from(mockStatus);
+        });
+
+        await fetchLegionJoystickStatus();
+        return;
+      }
+
+      final response = await http
+          .get(Uri.parse('$backendUrl/status'))
+          .timeout(const Duration(seconds: 3));
+
+      if (!mounted) return;
 
       if (response.statusCode == 200) {
         setState(() {
@@ -230,39 +253,62 @@ class _DashboardPageState extends State<DashboardPage> {
               bottom: false,
               child: SizedBox(
                 height: ui.tabHeight,
-                child: TabBar(
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                  indicatorSize: TabBarIndicatorSize.label,
-                  tabs: [
-                    Tab(
-                      height: ui.tabHeight,
-                      child: Text(
-                        'Dashboard',
-                        style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TabBar(
+                        labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                        indicatorSize: TabBarIndicatorSize.label,
+                        tabs: [
+                          Tab(
+                            height: ui.tabHeight,
+                            child: Text(
+                              'Dashboard',
+                              style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                            ),
+                          ),
+                          Tab(
+                            height: ui.tabHeight,
+                            child: Text(
+                              'Data',
+                              style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                            ),
+                          ),
+                          Tab(
+                            height: ui.tabHeight,
+                            child: BatteryTabLabel(
+                              battery: status?['battery'] as Map<String, dynamic>?,
+                              fontSize: ui.compact ? 13 : 15,
+                            ),
+                          ),
+                          if (isLegion)
+                            Tab(
+                              height: ui.tabHeight,
+                              child: Text(
+                                'Legion',
+                                style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                    Tab(
+                    SizedBox(
+                      width: ui.tabHeight + 8,
                       height: ui.tabHeight,
-                      child: Text(
-                        'Data',
-                        style: TextStyle(fontSize: ui.compact ? 13 : 15),
+                      child: IconButton(
+                        tooltip: 'Refresh dashboard status',
+                        padding: EdgeInsets.zero,
+                        iconSize: ui.compact ? 18 : 22,
+                        onPressed: refreshingStatus ? null : refreshDashboardStatus,
+                        icon: refreshingStatus
+                            ? SizedBox(
+                                width: ui.compact ? 15 : 18,
+                                height: ui.compact ? 15 : 18,
+                                child: const CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
                       ),
                     ),
-                    Tab(
-                      height: ui.tabHeight,
-                      child: BatteryTabLabel(
-                        battery: status?['battery'] as Map<String, dynamic>?,
-                        fontSize: ui.compact ? 13 : 15,
-                      ),
-                    ),
-                    if (isLegion)
-                      Tab(
-                        height: ui.tabHeight,
-                        child: Text(
-                          'Legion',
-                          style: TextStyle(fontSize: ui.compact ? 13 : 15),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -278,7 +324,9 @@ class _DashboardPageState extends State<DashboardPage> {
                     onPost: post,
                   ),
                   const DataManagementView(),
-                  DiagnosticsView(status: status!),
+                  DiagnosticsView(
+                    status: status!,
+                  ),
                   if (isLegion)
                     LegionControlsView(
                       running: legionJoystickRunning,
@@ -356,7 +404,10 @@ class DiagnosticsView extends StatelessWidget {
       children: [
         Text(
           'Diagnostics',
-          style: TextStyle(fontSize: ui.title, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            fontSize: ui.title,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         SizedBox(height: ui.gap),
         BatteryStatusCard(battery: battery),
@@ -501,41 +552,6 @@ class DataManagementView extends StatelessWidget {
         const BagBrowserCard(
   backendUrl: backendUrl,
 ),
-      ],
-    );
-  }
-}
-
-class LegionControlsView extends StatelessWidget {
-  const LegionControlsView({
-    super.key,
-    required this.running,
-    required this.serviceStatus,
-    required this.onStart,
-    required this.onStop,
-    required this.onRestart,
-  });
-
-  final bool running;
-  final String serviceStatus;
-  final VoidCallback onStart;
-  final VoidCallback onStop;
-  final VoidCallback onRestart;
-
-  @override
-  Widget build(BuildContext context) {
-    final ui = UiScale(context);
-
-    return ListView(
-      padding: EdgeInsets.all(ui.pagePadding),
-      children: [
-        LegionJoystickCard(
-          running: running,
-          serviceStatus: serviceStatus,
-          onStart: onStart,
-          onStop: onStop,
-          onRestart: onRestart,
-        ),
       ],
     );
   }
@@ -760,88 +776,6 @@ class CameraRtkGridCard extends StatelessWidget {
                   onPressed: noneRunning ? null : onStopAll,
                   icon: Icons.stop,
                   label: 'Stop',
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class LegionJoystickCard extends StatelessWidget {
-  const LegionJoystickCard({
-    super.key,
-    required this.running,
-    required this.serviceStatus,
-    required this.onStart,
-    required this.onStop,
-    required this.onRestart,
-  });
-
-  final bool running;
-  final String serviceStatus;
-  final VoidCallback onStart;
-  final VoidCallback onStop;
-  final VoidCallback onRestart;
-
-  @override
-  Widget build(BuildContext context) {
-    final ui = UiScale(context);
-    final statusColor = running ? Colors.greenAccent : Colors.redAccent;
-    final statusText = running ? 'Running' : 'Stopped';
-
-    return Card(
-      elevation: 5,
-      child: Padding(
-        padding: EdgeInsets.all(ui.cardPadding),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Legion Joystick Service',
-              style: TextStyle(fontSize: ui.title, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: ui.gap),
-            Row(
-              children: [
-                Icon(Icons.circle, size: ui.icon, color: statusColor),
-                const SizedBox(width: 8),
-                Text(
-                  '$statusText ($serviceStatus)',
-                  style: TextStyle(
-                    fontSize: ui.status,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            SizedBox(height: ui.gap),
-            Row(
-              children: [
-                Expanded(
-                  child: CompactButton(
-                    onPressed: running ? null : onStart,
-                    icon: Icons.play_arrow,
-                    label: 'Start',
-                  ),
-                ),
-                SizedBox(width: ui.gap),
-                Expanded(
-                  child: CompactButton(
-                    onPressed: running ? onStop : null,
-                    icon: Icons.stop,
-                    label: 'Stop',
-                  ),
-                ),
-                SizedBox(width: ui.gap),
-                Expanded(
-                  child: CompactButton(
-                    onPressed: onRestart,
-                    icon: Icons.restart_alt,
-                    label: 'Restart',
-                  ),
                 ),
               ],
             ),
