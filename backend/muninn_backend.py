@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 import signal
 import subprocess
@@ -13,6 +14,11 @@ import time
 import threading
 import getpass
 import shutil
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from std_msgs.msg import String
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,6 +40,7 @@ current_bag_path = None
 recording_start_time = None
 last_completed_bag_name = None
 last_completed_bag_path = None
+node_monitor_process = None
 
 transfer_state = {
     "active": False,
@@ -48,6 +55,9 @@ transfer_state = {
     "current": None,
     "error": None,
 }
+
+muninn_status = {}
+muninn_status_lock = threading.Lock()
 
 battery_status = {
     "available": False,
@@ -96,52 +106,93 @@ def run_bash(command: str, timeout=None):
     )
 
 
-def update_battery_loop():
-    global battery_status
 
-    command = "ros2 topic echo /a300_00008/platform/bms/state --once"
+class MuninnStatusSubscriber(Node):
+    def __init__(self):
+        super().__init__("muninn_backend_status_subscriber")
 
-    while True:
-        next_status = {
-            "available": False,
-            "percentage": None,
-        }
+        qos = QoSProfile(depth=10)
+        qos.reliability = ReliabilityPolicy.RELIABLE
+        qos.durability = DurabilityPolicy.VOLATILE
+
+        self.create_subscription(
+            String,
+            "/muninn/status",
+            self.status_callback,
+            qos,
+        )
+
+        self.get_logger().info("Muninn backend subscribed to /muninn/status")
+
+    def status_callback(self, msg):
+        global muninn_status
+        global battery_status
 
         try:
-            output = run_bash(command, timeout=3)
+            status = json.loads(msg.data)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f"Could not decode /muninn/status JSON: {e}")
+            return
 
-            # ros2 topic echo appends a YAML document separator.
-            # Keep only the first document.
-            first_document = output.split("---", 1)[0]
-            data = yaml.safe_load(first_document)
+        battery = status.get("battery")
 
-            if isinstance(data, dict):
-                percentage = data.get("percentage")
-
-                if percentage is not None and float(percentage) >= 0.0:
-                    next_status = {
-                        "available": True,
-                        "percentage": round(float(percentage) * 100),
-                    }
-
-        except Exception:
-            next_status = {
+        if not isinstance(battery, dict):
+            battery = {
                 "available": False,
                 "percentage": None,
             }
 
-        with battery_lock:
-            battery_status = next_status
+        battery = {
+            "available": bool(battery.get("available", False)),
+            "percentage": battery.get("percentage"),
+        }
 
-        time.sleep(5)
+        with muninn_status_lock:
+            muninn_status = status
+
+        with battery_lock:
+            battery_status = battery
+
+
+
+def start_node_monitor_process():
+    global node_monitor_process
+
+    # Do not start a duplicate if the backend already owns a running one.
+    if is_alive(node_monitor_process):
+        return
+
+    # If node_monitor is already running outside the backend, leave it alone.
+    # This keeps manual testing/systemd launch from being duplicated.
+    current_nodes = get_ros_nodes()
+    if "/muninn_node_monitor" in current_nodes:
+        return
+
+    node_monitor_process = start_process("ros2 run muninn_ros node_monitor")
+    processes["node_monitor"] = node_monitor_process
+
+
+def ros_spin_thread():
+    try:
+        if not rclpy.ok():
+            rclpy.init()
+
+        node = MuninnStatusSubscriber()
+        rclpy.spin(node)
+
+    except Exception as e:
+        print(f"[Muninn Backend] ROS status subscriber failed: {e}")
+
 
 @app.on_event("startup")
-def start_battery_worker():
-    battery_thread = threading.Thread(
-        target=update_battery_loop,
+def start_ros_workers():
+    start_node_monitor_process()
+
+    ros_thread = threading.Thread(
+        target=ros_spin_thread,
         daemon=True,
     )
-    battery_thread.start()
+    ros_thread.start()
 
 
 def start_process(command: str):
@@ -551,7 +602,6 @@ def delete_bag(bag_name: str):
 def usb_status():
     usb = build_usb_status()
 
-    storage = build_storage_status(config, usb)
     return {
         "ok": True,
         **usb,
@@ -643,6 +693,9 @@ def status():
     with battery_lock:
         battery = dict(battery_status)
 
+    with muninn_status_lock:
+        diagnostics = dict(muninn_status)
+
     return {
         "ok": True,
         "ros_nodes_visible": current_nodes,
@@ -670,6 +723,7 @@ def status():
         "usb": usb,
         "storage": storage,
         "battery": battery,
+        "diagnostics": diagnostics,
     }
 
 
