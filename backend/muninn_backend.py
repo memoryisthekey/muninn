@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import json
 import os
 import signal
 import subprocess
@@ -86,13 +85,14 @@ def ros_shell(command: str) -> str:
     """
 
 
-def run_bash(command: str):
+def run_bash(command: str, timeout=None):
     return subprocess.check_output(
         ros_shell(command),
         shell=True,
         text=True,
         executable="/bin/bash",
         env=bash_env(),
+        timeout=timeout,
     )
 
 
@@ -108,7 +108,7 @@ def update_battery_loop():
         }
 
         try:
-            output = run_bash(command)
+            output = run_bash(command, timeout=3)
 
             # ros2 topic echo appends a YAML document separator.
             # Keep only the first document.
