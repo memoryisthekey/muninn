@@ -503,6 +503,49 @@ def bags():
         "bags_directory": str(get_bags_directory(config)),
         "bags": list_bags_from_disk(config),
     }
+    
+@app.delete("/bags/{bag_name}")
+def delete_bag(bag_name: str):
+    if is_alive(recording_process):
+        return {
+            "ok": False,
+            "error": "Cannot delete while recording",
+        }
+
+    if transfer_state["active"]:
+        return {
+            "ok": False,
+            "error": "Cannot delete while transfer is active",
+        }
+
+    config = load_config()
+    bags_dir = get_bags_directory(config)
+    bag_path = bags_dir / bag_name
+
+    if not bag_path.exists() or not bag_path.is_dir():
+        return {
+            "ok": False,
+            "error": f"Bag not found: {bag_name}",
+        }
+
+    if bag_path.parent.resolve() != bags_dir.resolve():
+        return {
+            "ok": False,
+            "error": "Invalid bag path",
+        }
+
+    try:
+        shutil.rmtree(bag_path)
+        return {
+            "ok": True,
+            "status": "Bag deleted",
+            "bag_name": bag_name,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+        }
 
 @app.get("/usb")
 def usb_status():
