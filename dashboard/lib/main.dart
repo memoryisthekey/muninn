@@ -9,10 +9,10 @@ import 'widgets/bag_browser_card.dart';
 import 'widgets/storage_card.dart';
 import 'widgets/battery_indicator.dart';
 
-const bool devMode = false;
-// const String backendUrl = 'http://192.168.131.88:8000';
+const bool devMode = false; // set false for prod
+const String backendUrl = 'http://192.168.131.88:8000';
 // const String backendUrl = 'http://192.168.76.88:8000';
-const String backendUrl = 'http://127.0.0.1:8000';
+//const String backendUrl = 'http://127.0.0.1:8000';
 void main() {
   runApp(const MuninnApp());
 }

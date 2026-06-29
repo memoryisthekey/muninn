@@ -146,6 +146,92 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
     }
   }
 
+  Future<void> deleteSelectedBag() async {
+    final bag = selectedBag;
+
+    if (bag == null) {
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete recording?'),
+          content: Text(
+            'This will permanently delete:\n\n${bag.name}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.delete_forever),
+              label: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    final encodedBagName = Uri.encodeComponent(bag.name);
+
+    try {
+      final response = await http.delete(
+        Uri.parse('${widget.backendUrl}/bags/$encodedBagName'),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Backend returned ${response.statusCode}');
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['ok'] != true) {
+        throw Exception(data['error']?.toString() ?? 'Delete failed');
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        selectedBag = null;
+      });
+
+      await fetchBags();
+      await fetchStatus();
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted ${bag.name}'),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Delete bag failed: $e');
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Delete failed: $e'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ui = BagUiScale(context);
@@ -177,6 +263,7 @@ SizedBox(height: ui.gap),
               transfer: transfer,
               usb: usb,
               onTransferUsb: transferSelectedBagToUsb,
+              onDelete: deleteSelectedBag,
               onClear: clearSelectedBag,
             ),
             SizedBox(height: ui.sectionGap),
@@ -483,6 +570,7 @@ class SelectedBagPanel extends StatelessWidget {
     required this.transfer,
     required this.usb,
     required this.onTransferUsb,
+    required this.onDelete,
     required this.onClear,
   });
 
@@ -491,6 +579,7 @@ class SelectedBagPanel extends StatelessWidget {
   final Map<String, dynamic>? transfer;
   final Map<String, dynamic>? usb;
   final VoidCallback onTransferUsb;
+  final VoidCallback onDelete;
   final VoidCallback onClear;
 
   @override
@@ -521,6 +610,7 @@ class SelectedBagPanel extends StatelessWidget {
               transfer: transfer,
               usb: usb,
               onTransferUsb: onTransferUsb,
+              onDelete: onDelete,
               onClear: onClear,
             ),
     );
@@ -574,6 +664,7 @@ class _SelectedBagDetails extends StatelessWidget {
     required this.transfer,
     required this.usb,
     required this.onTransferUsb,
+    required this.onDelete,
     required this.onClear,
   });
 
@@ -582,6 +673,7 @@ class _SelectedBagDetails extends StatelessWidget {
   final Map<String, dynamic>? transfer;
   final Map<String, dynamic>? usb;
   final VoidCallback onTransferUsb;
+  final VoidCallback onDelete;
   final VoidCallback onClear;
 
   @override
@@ -609,7 +701,10 @@ class _SelectedBagDetails extends StatelessWidget {
         !canTransfer ||
         transferActive ||
         !usbWritable;
-        
+    final deleteDisabled =
+        !canTransfer ||
+        transferActive;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -714,6 +809,18 @@ class _SelectedBagDetails extends StatelessWidget {
                 icon: Icon(Icons.close, size: ui.icon),
                 label: Text(
                   'Clear',
+                  style: TextStyle(fontSize: ui.caption),
+                ),
+              ),
+            ),
+            SizedBox(width: ui.gap),
+            SizedBox(
+              height: ui.buttonHeight,
+              child: OutlinedButton.icon(
+                onPressed: deleteDisabled ? null : onDelete,
+                icon: Icon(Icons.delete_outline, size: ui.icon),
+                label: Text(
+                  'Delete',
                   style: TextStyle(fontSize: ui.caption),
                 ),
               ),
