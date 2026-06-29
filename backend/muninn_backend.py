@@ -171,6 +171,19 @@ def start_node_monitor_process():
     node_monitor_process = start_process("ros2 run muninn_ros node_monitor")
     processes["node_monitor"] = node_monitor_process
 
+def start_network_monitor_process():
+    if "network_monitor" in processes and is_alive(processes["network_monitor"]):
+        return True
+
+    current_nodes = get_ros_nodes()
+
+    if "/muninn_network_monitor" in current_nodes:
+        return True
+
+    process = start_process("ros2 run muninn_ros network_monitor")
+    processes["network_monitor"] = process
+    return True
+
 
 def ros_spin_thread():
     try:
@@ -187,6 +200,7 @@ def ros_spin_thread():
 @app.on_event("startup")
 def start_ros_workers():
     start_node_monitor_process()
+    start_network_monitor_process()
 
     ros_thread = threading.Thread(
         target=ros_spin_thread,
