@@ -71,7 +71,13 @@ class _DashboardPageState extends State<DashboardPage> {
   Map<String, dynamic>? status;
   Timer? timer;
   bool legionJoystickRunning = false;
+  bool legionJoystickConnected = false;
   String legionJoystickStatus = 'unknown';
+  String legionJoystickDetail = 'unknown';
+
+  bool zenohBridgeRunning = false;
+  String zenohBridgeStatus = 'unknown';
+
   bool refreshingStatus = false;
 
   bool get isLegion {
@@ -82,18 +88,38 @@ class _DashboardPageState extends State<DashboardPage> {
     if (!isLegion) return;
 
     try {
-      final result = await Process.run(
+      final serviceResult = await Process.run(
         'systemctl',
         ['is-active', 'legion_joystick_node.service'],
       );
 
-      final serviceStatus = result.stdout.toString().trim();
+      final joystickResult = await Process.run(
+        'bash',
+        ['-lc', 'ls /dev/input/js* >/dev/null 2>&1'],
+      );
+
+      final serviceStatus = serviceResult.stdout.toString().trim();
+      final serviceRunning = serviceStatus == 'active';
+      final joystickConnected = joystickResult.exitCode == 0;
+
+      String detail;
+      if (serviceRunning && joystickConnected) {
+        detail = 'Ready';
+      } else if (serviceRunning && !joystickConnected) {
+        detail = 'Service active, joystick not connected';
+      } else if (!serviceRunning && joystickConnected) {
+        detail = 'Joystick connected, service stopped';
+      } else {
+        detail = 'Stopped';
+      }
 
       if (!mounted) return;
 
       setState(() {
         legionJoystickStatus = serviceStatus.isEmpty ? 'unknown' : serviceStatus;
-        legionJoystickRunning = serviceStatus == 'active';
+        legionJoystickRunning = serviceRunning;
+        legionJoystickConnected = joystickConnected;
+        legionJoystickDetail = detail;
       });
     } catch (e) {
       debugPrint('Joystick status check failed: $e');
@@ -103,6 +129,37 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         legionJoystickStatus = 'unknown';
         legionJoystickRunning = false;
+        legionJoystickConnected = false;
+        legionJoystickDetail = 'unknown';
+      });
+    }
+  }
+
+  Future<void> fetchZenohBridgeStatus() async {
+    if (!isLegion) return;
+
+    try {
+      final result = await Process.run(
+        'systemctl',
+        ['is-active', 'zenoh_bridge.service'],
+      );
+
+      final serviceStatus = result.stdout.toString().trim();
+
+      if (!mounted) return;
+
+      setState(() {
+        zenohBridgeStatus = serviceStatus.isEmpty ? 'unknown' : serviceStatus;
+        zenohBridgeRunning = serviceStatus == 'active';
+      });
+    } catch (e) {
+      debugPrint('Zenoh bridge status check failed: $e');
+
+      if (!mounted) return;
+
+      setState(() {
+        zenohBridgeStatus = 'unknown';
+        zenohBridgeRunning = false;
       });
     }
   }
@@ -133,6 +190,28 @@ class _DashboardPageState extends State<DashboardPage> {
     await Future.delayed(const Duration(milliseconds: 500));
     await fetchLegionJoystickStatus();
     await fetchStatus();
+  }
+
+  Future<void> restartZenohBridge() async {
+    if (!isLegion) return;
+
+    try {
+      final result = await Process.run(
+        'sudo',
+        ['systemctl', 'restart', 'zenoh_bridge.service'],
+      );
+
+      if (result.exitCode != 0) {
+        debugPrint('Zenoh bridge restart failed: ${result.stderr}');
+      } else {
+        debugPrint('Zenoh bridge restart succeeded');
+      }
+    } catch (e) {
+      debugPrint('Zenoh bridge restart error: $e');
+    }
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    await fetchZenohBridgeStatus();
   }
 
   @override
@@ -177,6 +256,7 @@ class _DashboardPageState extends State<DashboardPage> {
         });
 
         await fetchLegionJoystickStatus();
+        await fetchZenohBridgeStatus();
         return;
       }
 
@@ -193,6 +273,7 @@ class _DashboardPageState extends State<DashboardPage> {
       }
 
       await fetchLegionJoystickStatus();
+      await fetchZenohBridgeStatus();
     } catch (e) {
       debugPrint('Status fetch failed: $e');
     }
@@ -330,10 +411,15 @@ class _DashboardPageState extends State<DashboardPage> {
                   if (isLegion)
                     LegionControlsView(
                       running: legionJoystickRunning,
+                      connected: legionJoystickConnected,
                       serviceStatus: legionJoystickStatus,
+                      detail: legionJoystickDetail,
                       onStart: () => runLegionJoystickCommand('start'),
                       onStop: () => runLegionJoystickCommand('stop'),
                       onRestart: () => runLegionJoystickCommand('restart'),
+                      zenohRunning: zenohBridgeRunning,
+                      zenohStatus: zenohBridgeStatus,
+                      onRestartZenoh: restartZenohBridge,
                     ),
                 ],
               ),

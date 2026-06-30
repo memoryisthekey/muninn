@@ -4,17 +4,28 @@ class LegionControlsView extends StatelessWidget {
   const LegionControlsView({
     super.key,
     required this.running,
+    required this.connected,
     required this.serviceStatus,
+    required this.detail,
     required this.onStart,
     required this.onStop,
     required this.onRestart,
+    required this.zenohRunning,
+    required this.zenohStatus,
+    required this.onRestartZenoh,
   });
 
   final bool running;
+  final bool connected;
   final String serviceStatus;
+  final String detail;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onRestart;
+
+  final bool zenohRunning;
+  final String zenohStatus;
+  final VoidCallback onRestartZenoh;
 
   @override
   Widget build(BuildContext context) {
@@ -25,10 +36,18 @@ class LegionControlsView extends StatelessWidget {
       children: [
         LegionJoystickCard(
           running: running,
+          connected: connected,
           serviceStatus: serviceStatus,
+          detail: detail,
           onStart: onStart,
           onStop: onStop,
           onRestart: onRestart,
+        ),
+        SizedBox(height: spacing),
+        ZenohBridgeCard(
+          running: zenohRunning,
+          serviceStatus: zenohStatus,
+          onRestart: onRestartZenoh,
         ),
         SizedBox(height: spacing),
         const _LegionInfoCard(),
@@ -41,14 +60,18 @@ class LegionJoystickCard extends StatelessWidget {
   const LegionJoystickCard({
     super.key,
     required this.running,
+    required this.connected,
     required this.serviceStatus,
+    required this.detail,
     required this.onStart,
     required this.onStop,
     required this.onRestart,
   });
 
   final bool running;
+  final bool connected;
   final String serviceStatus;
+  final String detail;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onRestart;
@@ -59,10 +82,18 @@ class LegionJoystickCard extends StatelessWidget {
     final statusSize = _LegionScale.status(context);
     final spacing = _LegionScale.spacing(context);
     final padding = _LegionScale.cardPadding(context);
-    final iconSize = _LegionScale.icon(context);
 
-    final statusColor = running ? Colors.greenAccent : Colors.redAccent;
-    final statusText = running ? 'Running' : 'Stopped';
+    final ready = running && connected;
+    final statusColor = ready
+        ? Colors.greenAccent
+        : running
+            ? Colors.orangeAccent
+            : Colors.redAccent;
+    final statusText = ready
+        ? 'Ready'
+        : running
+            ? 'Service active'
+            : 'Stopped';
 
     return Card(
       elevation: 5,
@@ -79,20 +110,17 @@ class LegionJoystickCard extends StatelessWidget {
               ),
             ),
             SizedBox(height: spacing),
-            Row(
-              children: [
-                Icon(Icons.circle, size: iconSize, color: statusColor),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '$statusText ($serviceStatus)',
-                    style: TextStyle(
-                      fontSize: statusSize,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
+            _StatusLine(
+              color: statusColor,
+              text: '$statusText ($serviceStatus)',
+            ),
+            SizedBox(height: spacing * 0.5),
+            Text(
+              detail,
+              style: TextStyle(
+                fontSize: statusSize * 0.9,
+                color: Theme.of(context).textTheme.bodySmall?.color,
+              ),
             ),
             SizedBox(height: spacing),
             Row(
@@ -129,6 +157,91 @@ class LegionJoystickCard extends StatelessWidget {
   }
 }
 
+class ZenohBridgeCard extends StatelessWidget {
+  const ZenohBridgeCard({
+    super.key,
+    required this.running,
+    required this.serviceStatus,
+    required this.onRestart,
+  });
+
+  final bool running;
+  final String serviceStatus;
+  final VoidCallback onRestart;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleSize = _LegionScale.title(context);
+    final spacing = _LegionScale.spacing(context);
+    final padding = _LegionScale.cardPadding(context);
+
+    return Card(
+      elevation: 5,
+      child: Padding(
+        padding: EdgeInsets.all(padding),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Zenoh Bridge',
+              style: TextStyle(
+                fontSize: titleSize,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(height: spacing),
+            _StatusLine(
+              color: running ? Colors.greenAccent : Colors.redAccent,
+              text: running ? 'Running ($serviceStatus)' : 'Stopped ($serviceStatus)',
+            ),
+            SizedBox(height: spacing),
+            SizedBox(
+              width: double.infinity,
+              child: _LegionButton(
+                onPressed: onRestart,
+                icon: Icons.restart_alt,
+                label: 'Restart Zenoh',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusLine extends StatelessWidget {
+  const _StatusLine({
+    required this.color,
+    required this.text,
+  });
+
+  final Color color;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconSize = _LegionScale.icon(context);
+    final statusSize = _LegionScale.status(context);
+
+    return Row(
+      children: [
+        Icon(Icons.circle, size: iconSize, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: statusSize,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _LegionInfoCard extends StatelessWidget {
   const _LegionInfoCard();
 
@@ -141,7 +254,7 @@ class _LegionInfoCard extends StatelessWidget {
       child: Padding(
         padding: EdgeInsets.all(padding),
         child: Text(
-          'Speed slider removed for now. Joystick speed is controlled by the running joystick node configuration.',
+          'Joystick status now separates the systemd service from the physical /dev/input/js* device. Ready means the service is active and a joystick is connected.',
           style: TextStyle(fontSize: statusSize * 0.9),
         ),
       ),
