@@ -3,4 +3,5 @@ legion ALL=(root) NOPASSWD: \
 /bin/systemctl stop legion_joystick_node.service, \
 /bin/systemctl restart legion_joystick_node.service, \
 /bin/systemctl is-active legion_joystick_node.service, \
-/bin/systemctl status legion_joystick_node.service
+/bin/systemctl status legion_joystick_node.service,    \
+/bin/systemctl restart zenoh_bridge.service
