@@ -20,7 +20,8 @@ class _StorageCardState extends State<StorageCard> {
   Timer? _timer;
 
   Map<String, dynamic>? bags;
-  Map<String, dynamic>? usb;
+  Map<String, dynamic>? usbStorage;
+  Map<String, dynamic>? usbStatus;
 
   @override
   void initState() {
@@ -55,7 +56,8 @@ class _StorageCardState extends State<StorageCard> {
 
       setState(() {
         bags = storage['bags'];
-        usb = storage['usb'];
+        usbStorage = storage['usb'];
+        usbStatus = data['usb'] as Map<String, dynamic>?;
       });
     } catch (_) {}
   }
@@ -121,6 +123,109 @@ class _StorageCardState extends State<StorageCard> {
     );
   }
 
+
+  Future<void> mountUsb() async {
+    try {
+      await http.post(Uri.parse('${widget.backendUrl}/usb/mount'));
+      await fetchStorage();
+    } catch (e) {
+      debugPrint('USB mount failed: $e');
+    }
+  }
+
+  Future<void> ejectUsb() async {
+    try {
+      await http.post(Uri.parse('${widget.backendUrl}/usb/eject'));
+      await fetchStorage();
+    } catch (e) {
+      debugPrint('USB eject failed: $e');
+    }
+  }
+
+  Widget buildUsbStorageSection() {
+    final connected = usbStatus?['connected'] == true;
+    final mounted = usbStatus?['mounted'] == true;
+    final writable = usbStatus?['writable'] == true;
+
+    final statusText = !connected
+        ? 'No USB drive detected'
+        : !mounted
+            ? 'USB detected, not mounted'
+            : !writable
+                ? 'USB mounted, not writable'
+                : 'USB ready';
+
+    final statusColor = !connected
+        ? Colors.grey
+        : !mounted
+            ? Colors.orangeAccent
+            : !writable
+                ? Colors.redAccent
+                : Colors.greenAccent;
+
+    final statusIcon = !connected
+        ? Icons.usb_off
+        : !mounted
+            ? Icons.usb
+            : !writable
+                ? Icons.warning_amber_rounded
+                : Icons.check_circle_outline;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.usb),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'USB Storage',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            Icon(statusIcon, size: 18, color: statusColor),
+            const SizedBox(width: 6),
+            Text(
+              statusText,
+              style: TextStyle(color: statusColor),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (!mounted)
+          const Text(
+            'Not mounted',
+            style: TextStyle(color: Colors.grey),
+          )
+        else
+          buildStorageSection(
+            title: 'USB Usage',
+            storage: usbStorage,
+            icon: Icons.drive_folder_upload,
+          ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            if (connected && !mounted)
+              FilledButton.icon(
+                onPressed: mountUsb,
+                icon: const Icon(Icons.usb),
+                label: const Text('Mount Disk'),
+              ),
+            if (mounted)
+              OutlinedButton.icon(
+                onPressed: ejectUsb,
+                icon: const Icon(Icons.eject),
+                label: const Text('Safely Remove'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -148,11 +253,7 @@ class _StorageCardState extends State<StorageCard> {
 
             const SizedBox(height: 24),
 
-            buildStorageSection(
-              title: 'USB Storage',
-              storage: usb,
-              icon: Icons.usb,
-            ),
+            buildUsbStorageSection(),
           ],
         ),
       ),

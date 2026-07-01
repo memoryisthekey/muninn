@@ -146,6 +146,7 @@ class _BagBrowserCardState extends State<BagBrowserCard> {
     }
   }
 
+
   Future<void> deleteSelectedBag() async {
     final bag = selectedBag;
 
@@ -603,7 +604,10 @@ class SelectedBagPanel extends StatelessWidget {
         ),
       ),
       child: selected == null
-          ? _EmptySelectedBag(ui: ui)
+          ? _EmptySelectedBag(
+              ui: ui,
+              transfer: transfer,
+            )
           : _SelectedBagDetails(
               ui: ui,
               bag: selected,
@@ -620,37 +624,44 @@ class SelectedBagPanel extends StatelessWidget {
 class _EmptySelectedBag extends StatelessWidget {
   const _EmptySelectedBag({
     required this.ui,
+    required this.transfer,
   });
 
   final BagUiScale ui;
+  final Map<String, dynamic>? transfer;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(Icons.touch_app_outlined, size: ui.icon, color: Colors.grey),
-        SizedBox(width: ui.gap),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Selected Bag',
-                style: TextStyle(
-                  fontSize: ui.subtitle,
-                  fontWeight: FontWeight.bold,
-                ),
+        Row(
+          children: [
+            Icon(Icons.touch_app_outlined, size: ui.icon, color: Colors.grey),
+            SizedBox(width: ui.gap),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Selected Bag',
+                    style: TextStyle(
+                      fontSize: ui.subtitle,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'No bag selected. Select a bag from the list below.',
+                    style: TextStyle(
+                      fontSize: ui.caption,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                'No bag selected. Select a bag from the list below.',
-                style: TextStyle(
-                  fontSize: ui.caption,
-                  color: Colors.grey,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ],
     );
@@ -688,8 +699,9 @@ class _SelectedBagDetails extends StatelessWidget {
         : 0.0;
     final transferSpeed = transfer?['speed']?.toString();
     final transferError = transfer?['error']?.toString();
+    final usbConnected = usb?['connected'] == true;
+    final usbMounted = usb?['mounted'] == true;
     final usbWritable = usb?['writable'] == true;
-
     final thisBagIsTransferring = transferActive && transferBagName == bag.name;
     final thisBagCompleted =
         !transferActive && transferStatus == 'completed' && transferBagName == bag.name;
@@ -700,6 +712,7 @@ class _SelectedBagDetails extends StatelessWidget {
     final transferDisabled =
         !canTransfer ||
         transferActive ||
+        !usbMounted ||
         !usbWritable;
     final deleteDisabled =
         !canTransfer ||
@@ -792,12 +805,20 @@ class _SelectedBagDetails extends StatelessWidget {
                     ? 'This bag is currently recording and cannot be transferred yet.'
                     : transferActive && !thisBagIsTransferring
                         ? 'Another transfer is already running.'
-                        : canTransfer
-                            ? 'Ready to transfer to USB.'
-                            : 'Transfer is disabled for this bag.',
+                        : !usbConnected
+                            ? 'Insert a USB drive to enable transfer.'
+                            : !usbMounted
+                                ? 'Use Mount Disk in USB Storage to enable transfer.'
+                                : !usbWritable
+                                    ? 'USB is mounted but not writable.'
+                                    : canTransfer
+                                        ? 'Ready to transfer to USB.'
+                                        : 'Transfer is disabled for this bag.',
                 style: TextStyle(
                   fontSize: ui.caption,
-                  color: bag.recording ? Colors.redAccent : Colors.grey,
+                  color: bag.recording || (usbMounted && !usbWritable)
+                      ? Colors.redAccent
+                      : Colors.grey,
                 ),
               ),
             ),
