@@ -1,0 +1,3 @@
+husky ALL=(root) NOPASSWD: \
+    /usr/local/bin/muninn_disk_mount, \
+    /usr/local/bin/muninn_disk_eject

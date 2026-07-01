@@ -424,6 +424,7 @@ def build_storage_status(config, usb_status):
 
 
 # USB helper functions
+# USB helper functions
 def can_write_to_path(path: Path) -> bool:
     test_file = path / ".muninn_write_test"
 
@@ -435,51 +436,86 @@ def can_write_to_path(path: Path) -> bool:
         return False
 
 
+def get_usb_devices():
+    devices = []
+
+    try:
+        output = subprocess.check_output(
+            [
+                "lsblk",
+                "-J",
+                "-o",
+                "NAME,TYPE,FSTYPE,LABEL,MOUNTPOINT,TRAN",
+            ],
+            text=True,
+        )
+
+        data = json.loads(output)
+
+        def scan(device, parent_tran=None):
+            tran = device.get("tran") or parent_tran
+
+            if tran == "usb" and device.get("type") in ["part", "disk"]:
+                mountpoint = device.get("mountpoint")
+                path = Path(mountpoint) if mountpoint else None
+
+                devices.append({
+                    "name": device.get("label") or device.get("name"),
+                    "device": f"/dev/{device.get('name')}",
+                    "type": device.get("type"),
+                    "fstype": device.get("fstype"),
+                    "label": device.get("label"),
+                    "path": mountpoint,
+                    "mountpoint": mountpoint,
+                    "mounted": mountpoint is not None,
+                    "writable": can_write_to_path(path) if path else False,
+                })
+
+            for child in device.get("children") or []:
+                scan(child, tran)
+
+        for device in data.get("blockdevices", []):
+            scan(device)
+
+    except Exception as e:
+        print(f"[Muninn Backend] USB detection failed: {e}")
+
+    return devices
+
+
 def get_usb_mounts():
-    user = getpass.getuser()
-
-    candidates = [
-        Path(f"/media/{user}"),
-        Path(f"/run/media/{user}"),
+    return [
+        device for device in get_usb_devices()
+        if device.get("mounted") is True
     ]
-
-    mounts = []
-
-    for base in candidates:
-        if not base.exists():
-            continue
-
-        for item in base.iterdir():
-            if not item.is_dir():
-                continue
-
-            mounts.append({
-                "name": item.name,
-                "path": str(item),
-                "writable": can_write_to_path(item),
-            })
-
-    return mounts
 
 
 def get_first_writable_usb_mount():
     for mount in get_usb_mounts():
-        if mount.get("writable") is True:
+        if mount.get("writable") is True and mount.get("path"):
             return Path(mount["path"])
 
     return None
 
 
 def build_usb_status():
-    mounts = get_usb_mounts()
+    devices = get_usb_devices()
+
+    mounts = [
+        device for device in devices
+        if device.get("mounted") is True
+    ]
+
     writable_mounts = [
         mount for mount in mounts
         if mount.get("writable") is True
     ]
 
     return {
-        "connected": len(mounts) > 0,
+        "connected": len(devices) > 0,
+        "mounted": len(mounts) > 0,
         "writable": len(writable_mounts) > 0,
+        "devices": devices,
         "mounts": mounts,
         "selected_mount": writable_mounts[0] if writable_mounts else None,
     }
@@ -620,7 +656,38 @@ def usb_status():
         "ok": True,
         **usb,
     }
+@app.post("/usb/mount")
+def mount_usb():
+    result = subprocess.run(
+        ["sudo", "-n", "/usr/local/bin/muninn_disk_mount"],
+        text=True,
+        capture_output=True,
+    )
 
+    return {
+        "ok": result.returncode == 0,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "usb": build_usb_status(),
+    }
+
+@app.post("/usb/eject")
+def eject_usb():
+    subprocess.run(["sync"], check=False)
+
+    result = subprocess.run(
+        ["sudo", "-n", "/usr/local/bin/muninn_disk_eject"],
+        text=True,
+        capture_output=True,
+    )
+
+    return {
+        "ok": result.returncode == 0,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "usb": build_usb_status(),
+    }
+    
 @app.post("/bags/transfer/usb/{bag_name}")
 def transfer_bag_to_usb(bag_name: str):
     global transfer_state
